@@ -1,5 +1,5 @@
 # encoding: utf-8
-"""Typo Chat — agentic Chat Completions API (OpenAI-compatible) with tool use and human-in-the-loop."""
+"""Taipo Chat — agentic Chat Completions API (OpenAI-compatible) with tool use and human-in-the-loop."""
 
 import threading
 
@@ -26,7 +26,7 @@ from _version import __version__ as PLUGIN_VERSION
 from state import ChatState, migration_default_strings
 from utils import DEFAULT_BASE_URL
 
-_DEFAULTS_PREFIX = "com.typo."
+_DEFAULTS_PREFIX = "com.taipo."
 
 _INSERT_NEWLINE_SEL = NSSelectorFromString("insertNewline:")
 
@@ -117,8 +117,8 @@ def _brief_json(value, limit=180):
     return s
 
 
-class TypoChatPlugin(GeneralPlugin):
-    windowName = "com.typo.TypoChat.main"
+class TaipoChatPlugin(GeneralPlugin):
+    windowName = "com.taipo.TaipoChat.main"
     _frame_autosave_set = False
 
     @objc.python_method
@@ -251,7 +251,7 @@ class TypoChatPlugin(GeneralPlugin):
 
         self.w.versionLabel = TextBox(
             (12, -20, -12, 14),
-            "TypoChat v%s" % PLUGIN_VERSION,
+            "Taipo Chat v%s" % PLUGIN_VERSION,
             sizeStyle="small",
             alignment="right",
         )
@@ -264,10 +264,10 @@ class TypoChatPlugin(GeneralPlugin):
     def settings(self):
         self.name = Glyphs.localize(
             {
-                "en": "Typo Chat",
-                "de": "Typo Chat",
-                "fr": "Typo Chat",
-                "es": "Typo Chat",
+                "en": "Taipo Chat",
+                "de": "Taipo Chat",
+                "fr": "Taipo Chat",
+                "es": "Taipo Chat",
             }
         )
         self._state = ChatState()
@@ -508,7 +508,7 @@ class TypoChatPlugin(GeneralPlugin):
         self._save_settings_from_ui()
         err = self._state.validate_setting_errors()
         if err:
-            _show_alert("Typo Chat", err)
+            _show_alert("Taipo Chat", err)
             return
         self._cancel_event = threading.Event()
         self._set_busy(True)
@@ -558,12 +558,12 @@ class TypoChatPlugin(GeneralPlugin):
             return
         font = self._font_provider()
         if font is None:
-            _show_alert("Typo Chat", "No font is open — cannot reset snapshot.")
+            _show_alert("Taipo Chat", "No font is open — cannot reset snapshot.")
             return
         try:
             info = store.reset(font)
         except Exception as e:
-            _show_alert("Typo Chat", "Reset failed: %s" % e)
+            _show_alert("Taipo Chat", "Reset failed: %s" % e)
             return
         names = ", ".join(info.get("glyph_names", []) or [])
         self._append_plain_text(

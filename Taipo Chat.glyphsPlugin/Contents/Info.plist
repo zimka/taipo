@@ -7,19 +7,19 @@
 	<key>CFBundleExecutable</key>
 	<string>plugin</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.typo.TypoChat</string>
+	<string>com.taipo.TaipoChat</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Typo Chat</string>
+	<string>Taipo Chat</string>
 	<key>CFBundleShortVersionString</key>
 	<string>0.3.5</string>
 	<key>CFBundleVersion</key>
 	<string>4</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Copyright © Typo</string>
+	<string>Copyright © Taipo</string>
 	<key>NSPrincipalClass</key>
-	<string>TypoChatPlugin</string>
+	<string>TaipoChatPlugin</string>
 	<key>PyMainFileNames</key>
 	<array>
 		<string>plugin.py</string>

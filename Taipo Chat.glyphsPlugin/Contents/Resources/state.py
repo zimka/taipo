@@ -1,5 +1,5 @@
 # encoding: utf-8
-"""Conversation state and agent loop for Typo Chat (no UI / Glyphs dependencies)."""
+"""Conversation state and agent loop for Taipo Chat (no UI / Glyphs dependencies)."""
 
 import json
 import urllib.error

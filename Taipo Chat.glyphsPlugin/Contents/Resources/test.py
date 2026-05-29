@@ -9,7 +9,7 @@ How to run in Glyphs
 2. Paste, substituting the absolute path to the plugin's ``Resources`` folder:
 
     import sys
-    sys.path.insert(0, "/Users/YOUR_NAME/my/grammafont_plugin/TypoChat.glyphsPlugin/Contents/Resources")
+    sys.path.insert(0, "/Users/YOUR_NAME/my/grammafont_plugin/Taipo Chat.glyphsPlugin/Contents/Resources")
     import test
     test.run_smoke()
 
@@ -431,7 +431,7 @@ def run_smoke():
     _test_tool_handlers_pure()
     _test_agent_loop_fake()
     _test_snapshot_store_pure()
-    print("Typo Chat Resources/test.py: run_smoke() OK")
+    print("Taipo Chat Resources/test.py: run_smoke() OK")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # encoding: utf-8
 """
-Agent tools for Typo Chat (Phase 2).
+Agent tools for Taipo Chat (Phase 2).
 
 Eight tools are exposed to the model via Anthropic ``tools`` parameter:
 
