@@ -20,9 +20,9 @@ Taipo Chat depends on Glyphs’ own **Python** and **Vanilla** modules (this is 
 
 ### 1) Plugin installation
 
-Get the plugin from **[GitHub Releases](https://github.com/zimka/typo/releases/)**.
+Get the plugin from **[GitHub Releases](https://github.com/zimka/taipo/releases/)**.
 
-For the current release, download **[Taipo Chat.glyphsPlugin.zip (v0.3.5)](https://github.com/zimka/typo/releases/download/v0.3.5/Taipo%20Chat.glyphsPlugin.zip)**. Unzip it: inside is a single bundle named **`Taipo Chat.glyphsPlugin`**. **Double-click** that file; Glyphs should install it. If nothing happens, use **Glyphs → Preferences → Add-ons → Install Plugin…** (menu wording may vary slightly by Glyphs version) and choose the same `.glyphsPlugin`.
+For the current release, download **[Taipo Chat.glyphsPlugin.zip (v0.3.5)](https://github.com/zimka/taipo/releases/download/v0.3.5/Taipo%20Chat.glyphsPlugin.zip)**. Unzip it: inside is a single bundle named **`Taipo Chat.glyphsPlugin`**. **Double-click** that file; Glyphs should install it. If nothing happens, use **Glyphs → Preferences → Add-ons → Install Plugin…** (menu wording may vary slightly by Glyphs version) and choose the same `.glyphsPlugin`.
 
 ### 2) OpenAI GPT API key
 
@@ -112,15 +112,15 @@ Provider policies and account settings can change; review the current terms on t
 | **Plan never runs** | You must send **`Approve`** on its own once you accept the plan. |
 | **Stuck or slow** | **Cancel** if shown; use **New chat** under **More** to clear context. |
 
-For bugs or features, use **[Issues](https://github.com/zimka/typo/issues)** on the repository.
+For bugs or features, use **[Issues](https://github.com/zimka/taipo/issues)** on the repository.
 
 ## Updates
 
-New versions are published on **[Releases](https://github.com/zimka/typo/releases/)**. Download the latest **`Taipo Chat.glyphsPlugin.zip`**, unzip, and **double-click** the `.glyphsPlugin` again to replace the previous install, or install via **Preferences → Add-ons**.
+New versions are published on **[Releases](https://github.com/zimka/taipo/releases/)**. Download the latest **`Taipo Chat.glyphsPlugin.zip`**, unzip, and **double-click** the `.glyphsPlugin` again to replace the previous install, or install via **Preferences → Add-ons**.
 
 ## Source code
 
-Developers can browse or contribute in the **[typo](https://github.com/zimka/typo)** repository on GitHub.
+Developers can browse or contribute in the **[taipo](https://github.com/zimka/taipo)** repository on GitHub.
 
 ## License
 

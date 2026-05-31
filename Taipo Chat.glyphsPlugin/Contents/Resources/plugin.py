@@ -19,7 +19,7 @@ from AppKit import (
 from Foundation import NSData, NSOperationQueue, NSSelectorFromString, NSSize
 from GlyphsApp import Glyphs, WINDOW_MENU
 from GlyphsApp.plugins import GeneralPlugin
-from vanilla import Button, EditText, PopUpButton, TextBox, TextEditor, Window
+from vanilla import Button, EditText, TextBox, TextEditor, Window
 
 import tools
 from _version import __version__ as PLUGIN_VERSION
@@ -117,6 +117,17 @@ def _brief_json(value, limit=180):
     return s
 
 
+def _is_approve_message(text):
+    return (text or "").strip().lower() == "approve"
+
+
+def _set_tooltip(control, message):
+    try:
+        control.setToolTip(message)
+    except Exception:
+        pass
+
+
 class TaipoChatPlugin(GeneralPlugin):
     windowName = "com.taipo.TaipoChat.main"
     _frame_autosave_set = False
@@ -190,12 +201,12 @@ class TaipoChatPlugin(GeneralPlugin):
         self.w.transcriptLabel = TextBox((12, y, 200, 14), "Transcript")
         y += 18
         self.w.transcript = TextEditor(
-            (12, y, -12, 228),
+            (12, y, -12, 248),
             text="",
             readOnly=True,
             checksSpelling=False,
         )
-        y += 248
+        y += 258
 
         self.w.inputLabel = TextBox((12, y, 200, 14), "Message")
         y += 18
@@ -206,47 +217,45 @@ class TaipoChatPlugin(GeneralPlugin):
             checksSpelling=True,
         )
         y += 80
-        self.w.inputHint = TextBox(
-            (12, y, -12, 28),
-            "Return: send. Shift+Return: new line. ⌘Return: send. Type Approve (alone) to authorize a pending plan.",
+
+        self.w.modeLabel = TextBox(
+            (12, y, 185, 14),
+            "Mode: Planning",
             sizeStyle="small",
         )
-        y += 32
-        self.w.tokenUsageLabel = TextBox((12, y, -12, 28), self._state.usage_caption())
+        self.w.beforeEditLabel = TextBox(
+            (205, y, 175, 14),
+            "Before: none",
+            sizeStyle="small",
+        )
+        self.w.tokenLabel = TextBox(
+            (390, y, -12, 14),
+            self._state.usage_caption(),
+            sizeStyle="small",
+        )
+        y += 18
+        self.w.statusDetail = TextBox(
+            (12, y, -12, 28),
+            "Ready. Describe a fix, then Send.",
+            sizeStyle="small",
+        )
         y += 32
 
-        self.w.sendButton = Button(
+        self.w.primaryButton = Button(
             (12, y, 88, 22),
             "Send",
-            callback=self._on_send_,
+            callback=self._on_primary_,
         )
-        self.w.sendButton.bind("\r", ["command"])
-        self.w.cancelButton = Button(
-            (108, y, 72, 22),
-            "Cancel",
-            callback=self._on_cancel_,
+        self.w.primaryButton.bind("\r", ["command"])
+        self.w.approveButton = Button(
+            (108, y, 100, 22),
+            "Approve plan",
+            callback=self._on_approve_plan_,
         )
-        self.w.cancelButton.enable(False)
-        self.w.cancelButton.show(False)
-        self.w.moreMenu = PopUpButton(
-            (-108, y, 96, 18),
-            ["More", "New chat", "Reset snapshot"],
-            callback=self._on_more_menu_,
-            sizeStyle="small",
-        )
-        self.w.moreMenu.set(0)
-        y += 28
-        self.w.resetSnapshotButton = Button(
-            (12, y, 160, 22),
-            "Reset snapshot",
+        self.w.revertEditsButton = Button(
+            (214, y, 118, 22),
+            "Revert Edits",
             callback=self._on_reset_snapshot_,
-            sizeStyle="small",
-        )
-        self.w.resetSnapshotButton.enable(False)
-        self.w.snapshotStatus = TextBox(
-            (180, y + 3, -12, 16),
-            "No snapshot saved.",
-            sizeStyle="small",
         )
 
         self.w.versionLabel = TextBox(
@@ -254,6 +263,20 @@ class TaipoChatPlugin(GeneralPlugin):
             "Taipo Chat v%s" % PLUGIN_VERSION,
             sizeStyle="small",
             alignment="right",
+        )
+
+        _set_tooltip(
+            self.w.inputField,
+            "Return to send. Shift+Return for new line.",
+        )
+        _set_tooltip(self.w.primaryButton, "Send your message to the assistant.")
+        _set_tooltip(
+            self.w.approveButton,
+            "Authorize the pending plan. You can also type Approve alone.",
+        )
+        _set_tooltip(
+            self.w.revertEditsButton,
+            "Restore listed glyphs to their before-edit state. ⌘Z in Glyphs also works.",
         )
 
         _in_tv = self.w.inputField.getNSTextView()
@@ -275,7 +298,11 @@ class TaipoChatPlugin(GeneralPlugin):
         self._tool_ctx = self._build_tool_context()
         self._cancel_event = None
         self._worker_busy = False
+        self._plan_pending = False
+        self._editing_mode = False
+        self._status_override = None
         self._build_window()
+        self._refresh_control_ui()
 
     @objc.python_method
     def start(self):
@@ -300,7 +327,7 @@ class TaipoChatPlugin(GeneralPlugin):
                 ns_win.setFrameAutosaveName_(self.windowName)
                 self._frame_autosave_set = True
             ns_win.makeKeyAndOrderFront_(self)
-        self._refresh_snapshot_ui()
+        self._refresh_control_ui()
 
     @objc.python_method
     def _save_settings_from_ui(self):
@@ -324,6 +351,23 @@ class TaipoChatPlugin(GeneralPlugin):
             return False
         return self._handle_input_insert_newline()
 
+    def textDidChange_(self, notification):
+        self._refresh_control_ui()
+
+    @objc.python_method
+    def _message_text(self):
+        """Live message field text (NSTextView is authoritative while typing)."""
+        try:
+            tv = self.w.inputField.getNSTextView()
+            if tv is not None:
+                return str(tv.string() or "")
+        except Exception:
+            pass
+        try:
+            return str(self.w.inputField.get() or "")
+        except Exception:
+            return ""
+
     @objc.python_method
     def _transcript_text_view(self):
         try:
@@ -339,19 +383,77 @@ class TaipoChatPlugin(GeneralPlugin):
         evt = NSApp.currentEvent()
         if evt is not None and evt.modifierFlags() & NSEventModifierFlagShift:
             return False
-        if not (self.w.inputField.get() or "").strip():
+        if not self._message_text().strip():
             return False
         self._on_send_(None)
         return True
 
     @objc.python_method
-    def _on_more_menu_(self, sender):
-        idx = sender.get()
-        if idx == 1:
-            self._on_new_chat_(sender)
-        elif idx == 2:
-            self._on_reset_snapshot_(sender)
-        sender.set(0)
+    def _has_snapshot(self):
+        store = getattr(self._tool_ctx, "snapshot_store", None)
+        return bool(store and store.has_snapshot())
+
+    @objc.python_method
+    def _before_edit_caption(self):
+        store = getattr(self._tool_ctx, "snapshot_store", None)
+        if not store or not store.has_snapshot():
+            return "Before: none"
+        names = list(getattr(store, "_glyph_names", []) or [])
+        preview = ", ".join(names[:3])
+        if len(names) > 3:
+            preview += ", +%d" % (len(names) - 3)
+        return "Before: %s" % (preview or "(saved)")
+
+    @objc.python_method
+    def _default_status_detail(self):
+        if self._status_override:
+            return self._status_override
+        if self._worker_busy:
+            if self._editing_mode:
+                return "Applying approved plan…"
+            return "Assistant is working…"
+        if self._plan_pending:
+            return "Plan ready — review above, then Approve plan or reply to revise."
+        if self._has_snapshot():
+            return "Edits done. Check diff above. Undo: Revert Edits or ⌘Z in Glyphs."
+        return "Ready. Describe a fix, then Send."
+
+    @objc.python_method
+    def _refresh_control_ui(self):
+        if not getattr(self, "w", None):
+            return
+
+        mode = "Editing" if self._editing_mode and self._worker_busy else "Planning"
+        self.w.modeLabel.set("Mode: %s" % mode)
+        self.w.beforeEditLabel.set(self._before_edit_caption())
+        self.w.tokenLabel.set(self._state.usage_caption())
+        self.w.statusDetail.set(self._default_status_detail())
+
+        if self._worker_busy:
+            self._set_primary_button("Cancel", True)
+            _set_tooltip(self.w.primaryButton, "Stop the current request.")
+        else:
+            has_text = bool(self._message_text().strip())
+            self._set_primary_button("Send", has_text)
+            _set_tooltip(self.w.primaryButton, "Send your message to the assistant.")
+
+        self.w.approveButton.enable(self._plan_pending and not self._worker_busy)
+        self.w.revertEditsButton.enable(self._has_snapshot() and not self._worker_busy)
+
+        try:
+            self.w.inputField.enable(not self._worker_busy)
+        except Exception:
+            pass
+
+    @objc.python_method
+    def _set_primary_button(self, title, enabled):
+        self.w.primaryButton.enable(enabled)
+        try:
+            ns_btn = self.w.primaryButton.getNSButton()
+            if ns_btn is not None:
+                ns_btn.setTitle_(title)
+        except Exception:
+            pass
 
     @objc.python_method
     def _append_plain_text(self, text, color=None):
@@ -359,9 +461,6 @@ class TaipoChatPlugin(GeneralPlugin):
         if tv is None:
             return
         attrs = {}
-        # Default to the system adaptive text color so the transcript is readable in both
-        # light and dark appearance (see debug log 2025-04-17: NSTextView.textColor is None
-        # by default, so attributed strings without NSColor render as static black).
         attrs["NSColor"] = color if color is not None else NSColor.textColor()
         body_font = NSFont.userFontOfSize_(12.0)
         if body_font is not None:
@@ -400,28 +499,10 @@ class TaipoChatPlugin(GeneralPlugin):
     @objc.python_method
     def _set_busy(self, busy):
         self._worker_busy = busy
-        self.w.sendButton.enable(not busy)
-        try:
-            self.w.inputField.enable(not busy)
-        except Exception:
-            pass
-        self.w.cancelButton.enable(busy)
-        self.w.cancelButton.show(busy)
-        self._refresh_snapshot_ui()
-
-    @objc.python_method
-    def _refresh_snapshot_ui(self):
-        store = getattr(self._tool_ctx, "snapshot_store", None)
-        has = bool(store and store.has_snapshot())
-        self.w.resetSnapshotButton.enable(has and not self._worker_busy)
-        if has:
-            names = list(getattr(store, "_glyph_names", []) or [])
-            preview = ", ".join(names[:3])
-            if len(names) > 3:
-                preview += ", +%d" % (len(names) - 3)
-            self.w.snapshotStatus.set("Snapshot: %s" % (preview or "(saved)"))
-        else:
-            self.w.snapshotStatus.set("No snapshot saved.")
+        if not busy:
+            self._editing_mode = False
+            self._status_override = None
+        self._refresh_control_ui()
 
     @objc.python_method
     def _on_event(self, event):
@@ -467,30 +548,40 @@ class TaipoChatPlugin(GeneralPlugin):
                         if raw:
                             self._append_image(raw)
         elif kind == "approval_required":
-            self._append_plain_text(
-                "\n[Plan pending — type Approve alone in the message field to authorize, or send prose to refine the plan.]\n",
-                color=NSColor.systemOrangeColor(),
-            )
+            self._plan_pending = True
+            self._refresh_control_ui()
         elif kind == "usage_updated":
-            self.w.tokenUsageLabel.set(self._state.usage_caption())
+            self.w.tokenLabel.set(self._state.usage_caption())
         elif kind == "done":
             reason = event.get("stop_reason") or "end_turn"
             self._append_plain_text("\n[turn finished: %s]\n\n" % reason)
+            self._plan_pending = False
+            self._refresh_control_ui()
         elif kind == "iteration_limit":
             self._append_plain_text(
                 "\n[iteration limit reached]\n\n",
                 color=NSColor.systemOrangeColor(),
             )
+            self._plan_pending = False
+            self._status_override = "Iteration limit reached."
+            self._refresh_control_ui()
         elif kind == "cancelled":
             self._append_plain_text("\n[cancelled by user]\n\n", color=NSColor.systemOrangeColor())
+            self._plan_pending = False
+            self._status_override = "Cancelled."
+            self._refresh_control_ui()
         elif kind == "error":
             self._append_plain_text(
                 "\n[error] %s\n\n" % (event.get("text") or ""),
                 color=NSColor.systemRedColor(),
             )
+            self._plan_pending = False
+            err = (event.get("text") or "").strip()
+            self._status_override = err[:120] if err else "Error."
+            self._refresh_control_ui()
 
         if kind in ("tool_result", "done", "cancelled", "iteration_limit"):
-            self._refresh_snapshot_ui()
+            self._refresh_control_ui()
         self._scroll_to_end()
 
     @objc.python_method
@@ -510,6 +601,9 @@ class TaipoChatPlugin(GeneralPlugin):
         if err:
             _show_alert("Taipo Chat", err)
             return
+        if _is_approve_message(user_text):
+            self._editing_mode = True
+        self._status_override = None
         self._cancel_event = threading.Event()
         self._set_busy(True)
 
@@ -532,49 +626,62 @@ class TaipoChatPlugin(GeneralPlugin):
         threading.Thread(target=worker, daemon=True).start()
 
     @objc.python_method
+    def _on_primary_(self, sender):
+        if self._worker_busy:
+            self._on_cancel_(sender)
+        else:
+            self._on_send_(sender)
+
+    @objc.python_method
     def _on_send_(self, sender):
-        text = (self.w.inputField.get() or "").strip()
+        text = self._message_text().strip()
         if not text:
             return
         self.w.inputField.set("")
+        self._refresh_control_ui()
         self._start_turn(text)
+
+    @objc.python_method
+    def _on_approve_plan_(self, sender):
+        if self._worker_busy or not self._plan_pending:
+            return
+        self.w.inputField.set("")
+        self._start_turn("Approve")
 
     @objc.python_method
     def _on_cancel_(self, sender):
         if self._cancel_event is not None:
             self._cancel_event.set()
-        self.w.cancelButton.enable(False)
+        self.w.primaryButton.enable(False)
 
     @objc.python_method
     def _on_reset_snapshot_(self, sender):
-        # AppKit calls this on the main thread; do the work directly here.
-        # Do NOT route through ``_run_on_main_sync`` — that would self-wait on
-        # NSOperationQueue.mainQueue and deadlock the UI.
         if self._worker_busy:
             return
         store = getattr(self._tool_ctx, "snapshot_store", None)
         if store is None or not store.has_snapshot():
-            self._refresh_snapshot_ui()
+            self._refresh_control_ui()
             return
         font = self._font_provider()
         if font is None:
-            _show_alert("Taipo Chat", "No font is open — cannot reset snapshot.")
+            _show_alert("Taipo Chat", "No font is open — cannot revert edits.")
             return
         try:
             info = store.reset(font)
         except Exception as e:
-            _show_alert("Taipo Chat", "Reset failed: %s" % e)
+            _show_alert("Taipo Chat", "Revert failed: %s" % e)
             return
         names = ", ".join(info.get("glyph_names", []) or [])
         self._append_plain_text(
-            "\n[manual reset_snapshot] reverted: %s\n\n" % names,
+            "\n[reverted edits] %s\n\n" % names,
             color=NSColor.systemOrangeColor(),
         )
-        self._refresh_snapshot_ui()
+        self._refresh_control_ui()
         self._scroll_to_end()
 
     @objc.python_method
     def _on_new_chat_(self, sender):
+        """Clear session state. No UI button yet — open a fresh window via Window menu."""
         if self._worker_busy and self._cancel_event is not None:
             self._cancel_event.set()
         self._state.clear()
@@ -584,11 +691,13 @@ class TaipoChatPlugin(GeneralPlugin):
         self._state.reset_system_prompt_to_default()
         self.w.systemPrompt.set(self._state.settings["systemPrompt"])
         self.w.inputField.set("")
-        self.w.tokenUsageLabel.set(self._state.usage_caption())
+        self._plan_pending = False
+        self._editing_mode = False
+        self._status_override = None
         store = getattr(self._tool_ctx, "snapshot_store", None)
         if store is not None:
             store.clear()
-        self._refresh_snapshot_ui()
+        self._refresh_control_ui()
         self._save_settings_from_ui()
 
     @objc.python_method
