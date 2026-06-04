@@ -19,12 +19,28 @@ from AppKit import (
 from Foundation import NSData, NSOperationQueue, NSSelectorFromString, NSSize
 from GlyphsApp import Glyphs, WINDOW_MENU
 from GlyphsApp.plugins import GeneralPlugin
-from vanilla import Button, EditText, TextBox, TextEditor, Window
+from vanilla import Button, CheckBox, EditText, TextBox, TextEditor, Window
 
 import tools
 from _version import __version__ as PLUGIN_VERSION
 from state import ChatState, migration_default_strings
-from utils import DEFAULT_BASE_URL
+from utils import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_MODEL,
+    DEFAULT_SYSTEM_PROMPT,
+)
+
+_SETTINGS_TOGGLE_W = 76
+_SETTINGS_ROW_H = 22
+_SETTINGS_ROW_GAP = 6
+_LABEL_ROW_H = 18
+_STATUS_ROW_H = 14
+_SYSTEM_PROMPT_H = 100
+_SECTION_SEP_H = 1
+_SECTION_SEP_GAP = 10
+_STRIP_TOP = 12
+_CHAT_BOTTOM_RESERVE = 290
 
 _DEFAULTS_PREFIX = "com.taipo."
 
@@ -56,6 +72,10 @@ def _set_default(name, value):
         Glyphs.defaults[_defaults_key(name)] = value
     except Exception:
         pass
+
+
+def _show_tool_results_from_default(raw):
+    return str(raw).strip().lower() not in ("0", "false", "no")
 
 
 def _show_alert(title, text):
@@ -128,6 +148,21 @@ def _set_tooltip(control, message):
         pass
 
 
+def _style_separator(textbox):
+    try:
+        tf = textbox.getNSTextField()
+        tf.setDrawsBackground_(True)
+        try:
+            tf.setBackgroundColor_(NSColor.separatorColor())
+        except Exception:
+            tf.setBackgroundColor_(NSColor.colorWithCalibratedWhite_alpha_(0.35, 1.0))
+        tf.setBordered_(False)
+        tf.setEditable_(False)
+        tf.setSelectable_(False)
+    except Exception:
+        pass
+
+
 class TaipoChatPlugin(GeneralPlugin):
     windowName = "com.taipo.TaipoChat.main"
     _frame_autosave_set = False
@@ -150,110 +185,126 @@ class TaipoChatPlugin(GeneralPlugin):
         s = self._state.settings
         self.w = Window((620, 900), self.name, minSize=(580, 800))
 
-        y = 12
-        self.w.baseUrlLabel = TextBox((12, y, 300, 14), "Base URL (POST → …/v1/chat/completions)")
-        y += 18
+        mt = s.get("maxTokens") or ""
+        if mt == DEFAULT_MAX_TOKENS:
+            mt = ""
+
+        self.w.settingsHeader = TextBox(
+            (12, _STRIP_TOP, -12, _LABEL_ROW_H),
+            "Model settings",
+        )
+        self.w.apiKeyLabel = TextBox(
+            (12, 0, 200, _LABEL_ROW_H),
+            "API key:",
+        )
+        self.w.apiKey = EditText(
+            (12, 0, -12, _SETTINGS_ROW_H),
+            s["apiKey"],
+            placeholder="Paste token",
+            continuous=True,
+        )
+        self.w.settingsToggle = Button(
+            (-(_SETTINGS_TOGGLE_W + 12), 0, _SETTINGS_TOGGLE_W, _SETTINGS_ROW_H),
+            "Expand",
+            callback=self._on_settings_toggle_,
+        )
+        self.w.baseUrlLabel = TextBox(
+            (12, 0, -12, _LABEL_ROW_H),
+            "API Base URL:",
+        )
         self.w.baseUrl = EditText(
-            (12, y, -12, 22),
+            (12, 0, -12, _SETTINGS_ROW_H),
             s["baseUrl"],
             placeholder=DEFAULT_BASE_URL,
             continuous=False,
         )
-        y += 30
-
-        self.w.apiKeyLabel = TextBox((12, y, 300, 14), "API key (Authorization: Bearer …)")
-        y += 18
-        self.w.apiKey = EditText(
-            (12, y, -12, 22),
-            s["apiKey"],
-            placeholder="Paste token",
-            continuous=False,
+        self.w.modelLabel = TextBox(
+            (12, 0, -12, _LABEL_ROW_H),
+            "Model:",
         )
-        y += 30
-
-        self.w.modelLabel = TextBox((12, y, 120, 14), "Model")
-        y += 18
         self.w.model = EditText(
-            (12, y, -12, 22),
+            (12, 0, -12, _SETTINGS_ROW_H),
             s["model"],
             continuous=False,
         )
-        y += 30
-
-        self.w.maxTokensLabel = TextBox((12, y, 200, 14), "Max tokens")
-        y += 18
+        self.w.maxTokensLabel = TextBox(
+            (12, 0, -12, _LABEL_ROW_H),
+            "Max tokens:",
+        )
         self.w.maxTokens = EditText(
-            (12, y, 120, 22),
-            s["maxTokens"],
+            (12, 0, -12, _SETTINGS_ROW_H),
+            mt,
+            placeholder="2048",
             continuous=False,
         )
-        y += 30
-
-        self.w.systemLabel = TextBox((12, y, 200, 14), "System prompt")
-        y += 18
-        self.w.systemPrompt = TextEditor(
-            (12, y, -12, 96),
-            text=s["systemPrompt"],
-            checksSpelling=True,
+        self.w.systemPromptLabel = TextBox(
+            (12, 0, -12, _LABEL_ROW_H),
+            "System prompt:",
         )
-        y += 104
+        self.w.systemPrompt = TextEditor(
+            (12, 0, -12, _SYSTEM_PROMPT_H),
+            text=s.get("systemPrompt") or DEFAULT_SYSTEM_PROMPT,
+            readOnly=False,
+            checksSpelling=False,
+        )
+        self.w.showToolResults = CheckBox(
+            (12, 0, -12, _SETTINGS_ROW_H),
+            "Show Tool Results",
+            value=self._show_tool_results,
+            callback=self._on_show_tool_results_toggle_,
+        )
+        self.w.sectionDivider = TextBox((12, 0, -12, _SECTION_SEP_H), "")
+        _style_separator(self.w.sectionDivider)
 
-        self.w.transcriptLabel = TextBox((12, y, 200, 14), "Transcript")
-        y += 18
+        self.w.transcriptLabel = TextBox((12, 0, 200, _LABEL_ROW_H), "Transcript")
         self.w.transcript = TextEditor(
-            (12, y, -12, 248),
+            (12, 0, -12, 200),
             text="",
             readOnly=True,
             checksSpelling=False,
         )
-        y += 258
-
-        self.w.inputLabel = TextBox((12, y, 200, 14), "Message")
-        y += 18
+        self.w.inputLabel = TextBox((12, 0, 200, _LABEL_ROW_H), "Message")
         self.w.inputField = TextEditor(
-            (12, y, -12, 72),
+            (12, 0, -12, 72),
             text="",
             readOnly=False,
             checksSpelling=True,
         )
-        y += 80
 
         self.w.modeLabel = TextBox(
-            (12, y, 185, 14),
+            (12, 0, 185, _STATUS_ROW_H),
             "Mode: Planning",
             sizeStyle="small",
         )
         self.w.beforeEditLabel = TextBox(
-            (205, y, 175, 14),
+            (205, 0, 175, _STATUS_ROW_H),
             "Before: none",
             sizeStyle="small",
         )
         self.w.tokenLabel = TextBox(
-            (390, y, -12, 14),
+            (390, 0, -12, _STATUS_ROW_H),
             self._state.usage_caption(),
             sizeStyle="small",
         )
-        y += 18
         self.w.statusDetail = TextBox(
-            (12, y, -12, 28),
+            (12, 0, -12, 28),
             "Ready. Describe a fix, then Send.",
             sizeStyle="small",
         )
-        y += 32
 
         self.w.primaryButton = Button(
-            (12, y, 88, 22),
+            (12, 0, 88, 22),
             "Send",
             callback=self._on_primary_,
         )
         self.w.primaryButton.bind("\r", ["command"])
         self.w.approveButton = Button(
-            (108, y, 100, 22),
+            (108, 0, 100, 22),
             "Approve plan",
             callback=self._on_approve_plan_,
         )
         self.w.revertEditsButton = Button(
-            (214, y, 118, 22),
+            (214, 0, 118, 22),
             "Revert Edits",
             callback=self._on_reset_snapshot_,
         )
@@ -265,6 +316,24 @@ class TaipoChatPlugin(GeneralPlugin):
             alignment="right",
         )
 
+        _set_tooltip(
+            self.w.apiKey,
+            "Paste your OpenAI API key. Stored in Glyphs preferences on this Mac. "
+            "OpenAI defaults are already set — expand only to change host, model, or token limit.",
+        )
+        _set_tooltip(
+            self.w.settingsToggle,
+            "Show or hide API Base URL, model, max tokens, transcript options, and system prompt.",
+        )
+        _set_tooltip(
+            self.w.baseUrl,
+            "Root URL of an OpenAI-compatible API (no /v1/chat/completions suffix).",
+        )
+        _set_tooltip(self.w.maxTokens, "Leave empty for default 2048.")
+        _set_tooltip(
+            self.w.systemPrompt,
+            "Instructions sent to the model on every turn. Saved when you Send.",
+        )
         _set_tooltip(
             self.w.inputField,
             "Return to send. Shift+Return for new line.",
@@ -278,10 +347,19 @@ class TaipoChatPlugin(GeneralPlugin):
             self.w.revertEditsButton,
             "Restore listed glyphs to their before-edit state. ⌘Z in Glyphs also works.",
         )
+        _set_tooltip(
+            self.w.showToolResults,
+            "When off, hides text tool output and turn-finished markers from new events. "
+            "Specimen and diff images still appear.",
+        )
+
+        self._sync_settings_controls_from_state()
 
         _in_tv = self.w.inputField.getNSTextView()
         if _in_tv is not None:
             _in_tv.setDelegate_(self)
+
+        self._layout_settings_strip()
 
     @objc.python_method
     def settings(self):
@@ -301,7 +379,12 @@ class TaipoChatPlugin(GeneralPlugin):
         self._plan_pending = False
         self._editing_mode = False
         self._status_override = None
+        self._settings_expanded = False
+        self._show_tool_results = _show_tool_results_from_default(
+            _get_default("showToolResults", "1")
+        )
         self._build_window()
+        self._refresh_setup_ui()
         self._refresh_control_ui()
 
     @objc.python_method
@@ -327,16 +410,167 @@ class TaipoChatPlugin(GeneralPlugin):
                 ns_win.setFrameAutosaveName_(self.windowName)
                 self._frame_autosave_set = True
             ns_win.makeKeyAndOrderFront_(self)
+        self._refresh_setup_ui()
         self._refresh_control_ui()
+
+    @objc.python_method
+    def _settings_strip_height(self):
+        h = (
+            _LABEL_ROW_H
+            + _SETTINGS_ROW_GAP
+            + _LABEL_ROW_H
+            + _SETTINGS_ROW_GAP
+            + _SETTINGS_ROW_H
+        )
+        if getattr(self, "_settings_expanded", False):
+            h += 3 * (
+                _LABEL_ROW_H
+                + _SETTINGS_ROW_GAP
+                + _SETTINGS_ROW_H
+                + _SETTINGS_ROW_GAP
+            )
+            h += _SETTINGS_ROW_H + _SETTINGS_ROW_GAP
+            h += _LABEL_ROW_H + _SETTINGS_ROW_GAP + _SYSTEM_PROMPT_H
+        return h
+
+    @objc.python_method
+    def _chat_top_y(self):
+        return (
+            _STRIP_TOP
+            + self._settings_strip_height()
+            + _SECTION_SEP_GAP
+            + _SECTION_SEP_H
+            + 8
+        )
+
+    @objc.python_method
+    def _layout_settings_strip(self):
+        y = _STRIP_TOP
+        self.w.settingsHeader.setPosSize((12, y, -12, _LABEL_ROW_H))
+        y += _LABEL_ROW_H + _SETTINGS_ROW_GAP
+
+        self.w.apiKeyLabel.setPosSize((12, y, 200, _LABEL_ROW_H))
+        self.w.settingsToggle.setPosSize(
+            (-(_SETTINGS_TOGGLE_W + 12), y, _SETTINGS_TOGGLE_W, _SETTINGS_ROW_H)
+        )
+        y += _LABEL_ROW_H + _SETTINGS_ROW_GAP
+        self.w.apiKey.setPosSize((12, y, -12, _SETTINGS_ROW_H))
+        y += _SETTINGS_ROW_H + _SETTINGS_ROW_GAP
+
+        expanded = getattr(self, "_settings_expanded", False)
+        expanded_controls = (
+            self.w.baseUrlLabel,
+            self.w.baseUrl,
+            self.w.modelLabel,
+            self.w.model,
+            self.w.maxTokensLabel,
+            self.w.maxTokens,
+            self.w.showToolResults,
+            self.w.systemPromptLabel,
+            self.w.systemPrompt,
+        )
+        for control in expanded_controls:
+            control.show(expanded)
+
+        if expanded:
+            self.w.baseUrlLabel.setPosSize((12, y, -12, _LABEL_ROW_H))
+            y += _LABEL_ROW_H + _SETTINGS_ROW_GAP
+            self.w.baseUrl.setPosSize((12, y, -12, _SETTINGS_ROW_H))
+            y += _SETTINGS_ROW_H + _SETTINGS_ROW_GAP
+
+            self.w.modelLabel.setPosSize((12, y, -12, _LABEL_ROW_H))
+            y += _LABEL_ROW_H + _SETTINGS_ROW_GAP
+            self.w.model.setPosSize((12, y, -12, _SETTINGS_ROW_H))
+            y += _SETTINGS_ROW_H + _SETTINGS_ROW_GAP
+
+            self.w.maxTokensLabel.setPosSize((12, y, -12, _LABEL_ROW_H))
+            y += _LABEL_ROW_H + _SETTINGS_ROW_GAP
+            self.w.maxTokens.setPosSize((12, y, -12, _SETTINGS_ROW_H))
+            y += _SETTINGS_ROW_H + _SETTINGS_ROW_GAP
+
+            self.w.showToolResults.setPosSize((12, y, -12, _SETTINGS_ROW_H))
+            y += _SETTINGS_ROW_H + _SETTINGS_ROW_GAP
+
+            self.w.systemPromptLabel.setPosSize((12, y, -12, _LABEL_ROW_H))
+            y += _LABEL_ROW_H + _SETTINGS_ROW_GAP
+            self.w.systemPrompt.setPosSize((12, y, -12, _SYSTEM_PROMPT_H))
+
+        try:
+            ns_btn = self.w.settingsToggle.getNSButton()
+            if ns_btn is not None:
+                ns_btn.setTitle_("Collapse" if expanded else "Expand")
+        except Exception:
+            pass
+
+        sep_y = _STRIP_TOP + self._settings_strip_height() + (_SECTION_SEP_GAP // 2)
+        self.w.sectionDivider.setPosSize((12, sep_y, -12, _SECTION_SEP_H))
+
+        self._layout_chat_section()
+
+    @objc.python_method
+    def _layout_chat_section(self):
+        top = self._chat_top_y()
+        try:
+            win_h = self.w.getPosSize()[3]
+        except Exception:
+            win_h = 900
+        transcript_h = max(180, win_h - top - _CHAT_BOTTOM_RESERVE)
+        y = top
+        self.w.transcriptLabel.setPosSize((12, y, 200, _LABEL_ROW_H))
+        y += _LABEL_ROW_H + _SETTINGS_ROW_GAP
+        self.w.transcript.setPosSize((12, y, -12, transcript_h))
+        y += transcript_h + 10
+        self.w.inputLabel.setPosSize((12, y, 200, _LABEL_ROW_H))
+        y += _LABEL_ROW_H + _SETTINGS_ROW_GAP
+        self.w.inputField.setPosSize((12, y, -12, 72))
+        y += 80
+        self.w.modeLabel.setPosSize((12, y, 185, _STATUS_ROW_H))
+        self.w.beforeEditLabel.setPosSize((205, y, 175, _STATUS_ROW_H))
+        self.w.tokenLabel.setPosSize((390, y, -12, _STATUS_ROW_H))
+        y += 18
+        self.w.statusDetail.setPosSize((12, y, -12, 28))
+        y += 32
+        self.w.primaryButton.setPosSize((12, y, 88, 22))
+        self.w.approveButton.setPosSize((108, y, 100, 22))
+        self.w.revertEditsButton.setPosSize((214, y, 118, 22))
+
+    @objc.python_method
+    def _sync_settings_controls_from_state(self):
+        s = self._state.settings
+        self.w.baseUrl.set(s.get("baseUrl") or DEFAULT_BASE_URL)
+        self.w.model.set((s.get("model") or "").strip() or DEFAULT_MODEL)
+        mt = (s.get("maxTokens") or "").strip()
+        if mt == DEFAULT_MAX_TOKENS:
+            mt = ""
+        self.w.maxTokens.set(mt)
+        self.w.systemPrompt.set(
+            (s.get("systemPrompt") or "").strip() or DEFAULT_SYSTEM_PROMPT
+        )
+
+    @objc.python_method
+    def _refresh_setup_ui(self):
+        if not getattr(self, "w", None):
+            return
+        self._layout_settings_strip()
+
+    @objc.python_method
+    def _on_settings_toggle_(self, sender):
+        self._settings_expanded = not self._settings_expanded
+        self._refresh_setup_ui()
+
+    @objc.python_method
+    def _on_show_tool_results_toggle_(self, sender):
+        self._show_tool_results = bool(self.w.showToolResults.get())
+        _set_default("showToolResults", "1" if self._show_tool_results else "0")
 
     @objc.python_method
     def _save_settings_from_ui(self):
         self._state.update_settings_from_ui_fields(
-            (self.w.baseUrl.get() or "").strip(),
+            (self.w.baseUrl.get() or "").strip() or DEFAULT_BASE_URL,
             (self.w.apiKey.get() or "").strip(),
-            (self.w.model.get() or "").strip(),
+            (self.w.model.get() or "").strip() or DEFAULT_MODEL,
             (self.w.maxTokens.get() or "").strip(),
-            self.w.systemPrompt.get() or "",
+            (self.w.systemPrompt.get() or "").strip() or DEFAULT_SYSTEM_PROMPT,
         )
         _set_default("settingsJson", self._state.get_settings_json())
 
@@ -469,6 +703,30 @@ class TaipoChatPlugin(GeneralPlugin):
         tv.textStorage().appendAttributedString_(attr_str)
 
     @objc.python_method
+    def _append_role_line(self, role_label, body, label_color):
+        """Append ``role_label: body`` with a colored role prefix and default body color."""
+        tv = self._transcript_text_view()
+        if tv is None:
+            return
+        body_font = NSFont.userFontOfSize_(12.0)
+        storage = tv.textStorage()
+        prefix_attrs = {"NSColor": label_color}
+        body_attrs = {"NSColor": NSColor.textColor()}
+        if body_font is not None:
+            prefix_attrs["NSFont"] = body_font
+            body_attrs["NSFont"] = body_font
+        storage.appendAttributedString_(
+            NSAttributedString.alloc().initWithString_attributes_(
+                "%s: " % role_label, prefix_attrs
+            )
+        )
+        storage.appendAttributedString_(
+            NSAttributedString.alloc().initWithString_attributes_(
+                "%s\n" % (body or ""), body_attrs
+            )
+        )
+
+    @objc.python_method
     def _append_image(self, png_bytes):
         tv = self._transcript_text_view()
         if tv is None or not png_bytes:
@@ -510,11 +768,19 @@ class TaipoChatPlugin(GeneralPlugin):
         kind = event.get("kind")
 
         if kind == "user":
-            self._append_plain_text("You: %s\n" % event.get("text", ""))
+            self._append_role_line(
+                "You",
+                event.get("text", ""),
+                NSColor.systemOrangeColor(),
+            )
         elif kind == "assistant_text":
             text = event.get("text") or ""
             if text:
-                self._append_plain_text("Assistant: %s\n" % text)
+                self._append_role_line(
+                    "Assistant",
+                    text,
+                    NSColor.systemPurpleColor(),
+                )
         elif kind == "tool_use":
             line = "[tool_use] %s(%s)\n" % (
                 event.get("name", "?"),
@@ -523,38 +789,43 @@ class TaipoChatPlugin(GeneralPlugin):
             self._append_plain_text(line, color=NSColor.systemBlueColor())
         elif kind == "tool_result":
             blocks = event.get("content") or []
-            is_error = bool(event.get("is_error"))
-            prefix = "[tool_result%s] %s:\n" % (
-                " error" if is_error else "",
-                event.get("name", "?"),
-            )
-            self._append_plain_text(
-                prefix,
-                color=NSColor.systemRedColor() if is_error else NSColor.systemGrayColor(),
-            )
-            for b in blocks:
-                btype = b.get("type")
-                if btype == "text":
-                    self._append_plain_text((b.get("text") or "") + "\n")
-                elif btype == "image":
-                    src = b.get("source") or {}
-                    if src.get("type") == "base64":
-                        import base64
+            has_image = any(b.get("type") == "image" for b in blocks)
+            if self._show_tool_results or has_image:
+                is_error = bool(event.get("is_error"))
+                prefix = "[tool_result%s] %s:\n" % (
+                    " error" if is_error else "",
+                    event.get("name", "?"),
+                )
+                self._append_plain_text(
+                    prefix,
+                    color=NSColor.systemRedColor()
+                    if is_error
+                    else NSColor.systemGrayColor(),
+                )
+                for b in blocks:
+                    btype = b.get("type")
+                    if btype == "text" and self._show_tool_results:
+                        self._append_plain_text((b.get("text") or "") + "\n")
+                    elif btype == "image":
+                        src = b.get("source") or {}
+                        if src.get("type") == "base64":
+                            import base64
 
-                        try:
-                            raw = base64.b64decode(src.get("data") or "")
-                        except Exception:
-                            raw = b""
-                        if raw:
-                            self._append_image(raw)
+                            try:
+                                raw = base64.b64decode(src.get("data") or "")
+                            except Exception:
+                                raw = b""
+                            if raw:
+                                self._append_image(raw)
         elif kind == "approval_required":
             self._plan_pending = True
             self._refresh_control_ui()
         elif kind == "usage_updated":
             self.w.tokenLabel.set(self._state.usage_caption())
         elif kind == "done":
-            reason = event.get("stop_reason") or "end_turn"
-            self._append_plain_text("\n[turn finished: %s]\n\n" % reason)
+            if self._show_tool_results:
+                reason = event.get("stop_reason") or "end_turn"
+                self._append_plain_text("\n[turn finished: %s]\n\n" % reason)
             self._plan_pending = False
             self._refresh_control_ui()
         elif kind == "iteration_limit":
@@ -689,7 +960,6 @@ class TaipoChatPlugin(GeneralPlugin):
         if tv is not None:
             tv.textStorage().setAttributedString_(NSAttributedString.alloc().initWithString_(""))
         self._state.reset_system_prompt_to_default()
-        self.w.systemPrompt.set(self._state.settings["systemPrompt"])
         self.w.inputField.set("")
         self._plan_pending = False
         self._editing_mode = False
@@ -697,6 +967,7 @@ class TaipoChatPlugin(GeneralPlugin):
         store = getattr(self._tool_ctx, "snapshot_store", None)
         if store is not None:
             store.clear()
+        self._refresh_setup_ui()
         self._refresh_control_ui()
         self._save_settings_from_ui()
 
