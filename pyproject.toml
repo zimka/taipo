@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [tool.hatch.version]
-path = "Taipo Chat.glyphsPlugin/Contents/Resources/_version.py"
+path = "TaipoChat.glyphsPlugin/Contents/Resources/_version.py"
 
 [tool.hatch.build.targets.wheel]
 bypass-selection = true

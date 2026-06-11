@@ -6,6 +6,8 @@
 
 **Taipo Chat** is a chat assistant that lives inside **Glyphs**. You describe a problem in ordinary language; the assistant reads your font, suggests a step-by-step plan, and can apply edits **only after you explicitly allow it** by typing **Approve**.
 
+→ **[taipo.chat](https://taipo.chat)** — demo video and product overview.
+
 Taipo Chat connects to **OpenAI’s GPT** by default (**Base URL** and **Model** are preset in the plugin). You need an **internet connection** and a **GPT API key** from OpenAI (see Quickstart). Your font file stays on your Mac; only what the session needs is sent to the configured host (see **Privacy** below).
 
 ## Requirements
@@ -28,7 +30,7 @@ Taipo Chat depends on Glyphs’ own **Python** and **Vanilla** modules (Glyphs�
 
 1. Open **[GitHub Releases](https://github.com/zimka/taipo/releases/latest)**.
 2. Download the **`.zip`** or **`.tar.gz`** archive and unpack it.
-3. **Double-click** **`Taipo Chat.glyphsPlugin`** inside to install the plugin. If nothing happens, use **Glyphs → Settings → Addons → Install Plugin…** and choose the same file.
+3. **Double-click** **`TaipoChat.glyphsPlugin`** inside to install the plugin. If nothing happens, use **Glyphs → Settings → Addons → Install Plugin…** and choose the same file.
 
 ### 3) OpenAI GPT API key
 
@@ -122,7 +124,7 @@ For bugs or features, use **[Issues](https://github.com/zimka/taipo/issues)** on
 
 ## Updates
 
-New versions are published on **[Releases](https://github.com/zimka/taipo/releases/latest)**. Download the latest **`Taipo Chat.glyphsPlugin.zip`**, unzip, and **double-click** the `.glyphsPlugin` again to replace the previous install, or install via **Preferences → Add-ons**.
+New versions are published on **[Releases](https://github.com/zimka/taipo/releases/latest)**. Download the latest **`TaipoChat.glyphsPlugin.zip`**, unzip, and **double-click** the `.glyphsPlugin` again to replace the previous install, or install via **Preferences → Add-ons**.
 
 ## Source code
 

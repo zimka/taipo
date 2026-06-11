@@ -9,7 +9,7 @@ How to run in Glyphs
 2. Paste, substituting the absolute path to the plugin's ``Resources`` folder:
 
     import sys
-    sys.path.insert(0, "/Users/YOUR_NAME/my/grammafont_plugin/Taipo Chat.glyphsPlugin/Contents/Resources")
+    sys.path.insert(0, "/Users/YOUR_NAME/my/grammafont_plugin/TaipoChat.glyphsPlugin/Contents/Resources")
     import test
     test.run_smoke()
 
