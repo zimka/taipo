@@ -11,24 +11,26 @@ Taipo Chat connects to **OpenAI’s GPT** by default (**Base URL** and **Model**
 ## Requirements
 
 - **Glyphs 3** on **macOS** (same as the Glyphs app).
-- **Python** and **Vanilla** modules from Glyphs’ Plugin Manager (see step 0).
+- **Python** and **Vanilla** modules from Glyphs’ Plugin Manager, plus Glyphs’ bundled Python selected in Settings (see **Prepare Glyphs** below).
 - A **stable internet** connection while you chat.
 
 ## Quickstart
 
-### 0) Glyphs preparation
+### 1) Prepare Glyphs
 
-Taipo Chat depends on Glyphs’ own **Python** and **Vanilla** modules (this is Glyphs’ scripting UI stack — not something you install from python.org).
+Taipo Chat depends on Glyphs’ own **Python** and **Vanilla** modules (Glyphs’ scripting UI stack — not something you install from python.org). Without the steps below, Glyphs may use your system Homebrew Python instead, and Taipo Chat will not load.
 
-**Plugin Manager (recommended):** **Window → Plugin Manager → Modules**. Find **Python** and **Vanilla**, then click **Install**.
+1. **Window → Plugin Manager → Modules** — install **Python** and **Vanilla**.
+2. **Glyphs → Settings → Addons** — set **Python version** to **3.* (Glyphs)**. See the [Glyphs Addons handbook](https://handbook.glyphsapp.com/settings/addons/) if the option is missing.
+3. **Restart Glyphs.**
 
-### 1) Plugin installation
+### 2) Install Taipo
 
-Get the plugin from the **[latest GitHub Release](https://github.com/zimka/taipo/releases/latest)**.
+1. Open **[GitHub Releases](https://github.com/zimka/taipo/releases/latest)**.
+2. Download the **`.zip`** or **`.tar.gz`** archive and unpack it.
+3. **Double-click** **`Taipo Chat.glyphsPlugin`** inside to install the plugin. If nothing happens, use **Glyphs → Settings → Addons → Install Plugin…** and choose the same file.
 
-Download **[Taipo Chat.glyphsPlugin.zip](https://github.com/zimka/taipo/releases/latest/download/Taipo%20Chat.glyphsPlugin.zip)** from that page (or use the direct link). Unzip it: inside is a single bundle named **`Taipo Chat.glyphsPlugin`**. **Double-click** that file; Glyphs should install it. If nothing happens, use **Glyphs → Preferences → Add-ons → Install Plugin…** (menu wording may vary slightly by Glyphs version) and choose the same `.glyphsPlugin`.
-
-### 2) OpenAI GPT API key
+### 3) OpenAI GPT API key
 
 Taipo Chat is preset for OpenAI: **Base URL** `https://api.openai.com` and **Model** `gpt-5.4`. You only need a **GPT API key** in most cases.
 
@@ -110,7 +112,7 @@ Provider policies and account settings can change; review the current terms on t
 
 | Problem | What to try |
 |--------|-------------|
-| **“Python” / “Vanilla” errors** | Install both modules from **Plugin Manager → Modules**, then restart Glyphs. |
+| **“Python” / “Vanilla” errors** | Install both modules from **Plugin Manager → Modules**, set **Python version** to **3.* (Glyphs)** under **Settings → Addons**, then restart Glyphs. |
 | **HTTP errors or “unauthorized”** | Confirm the key is valid, the account can call the chosen **Model**, and billing is active. |
 | **Wrong or empty replies** | For OpenAI, **Base URL** should be `https://api.openai.com` with no path after the host. After switching providers, verify **Base URL** and **Model** match that vendor’s docs. |
 | **Plan never runs** | You must send **`Approve`** on its own once you accept the plan. |
