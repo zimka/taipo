@@ -177,6 +177,7 @@ class TaipoChatPlugin(GeneralPlugin):
             font_provider=self._font_provider,
             render_contract=tools.DEFAULT_RENDER_CONTRACT,
             snapshot_store=tools.SnapshotStore(),
+            api_settings=self._state.settings,
         )
 
     @objc.python_method
@@ -249,9 +250,9 @@ class TaipoChatPlugin(GeneralPlugin):
         )
         self.w.showToolResults = CheckBox(
             (12, 0, -12, _SETTINGS_ROW_H),
-            "Show Tool Results",
-            value=self._show_tool_results,
-            callback=self._on_show_tool_results_toggle_,
+            "Show Debug Info",
+            value=self._debug_info,
+            callback=self._on_debug_info_toggle_,
         )
         self.w.sectionDivider = TextBox((12, 0, -12, _SECTION_SEP_H), "")
         _style_separator(self.w.sectionDivider)
@@ -349,8 +350,8 @@ class TaipoChatPlugin(GeneralPlugin):
         )
         _set_tooltip(
             self.w.showToolResults,
-            "When off, hides text tool output and turn-finished markers from new events. "
-            "Specimen and diff images still appear.",
+            "When on, shows tool inputs/outputs, turn-finished markers, and full error detail. "
+            "Specimen and diff images always appear.",
         )
 
         self._sync_settings_controls_from_state()
@@ -380,8 +381,8 @@ class TaipoChatPlugin(GeneralPlugin):
         self._editing_mode = False
         self._status_override = None
         self._settings_expanded = False
-        self._show_tool_results = _show_tool_results_from_default(
-            _get_default("showToolResults", "1")
+        self._debug_info = _show_tool_results_from_default(
+            _get_default("debugInfo", "1")
         )
         self._build_window()
         self._refresh_setup_ui()
@@ -559,9 +560,9 @@ class TaipoChatPlugin(GeneralPlugin):
         self._refresh_setup_ui()
 
     @objc.python_method
-    def _on_show_tool_results_toggle_(self, sender):
-        self._show_tool_results = bool(self.w.showToolResults.get())
-        _set_default("showToolResults", "1" if self._show_tool_results else "0")
+    def _on_debug_info_toggle_(self, sender):
+        self._debug_info = bool(self.w.showToolResults.get())
+        _set_default("debugInfo", "1" if self._debug_info else "0")
 
     @objc.python_method
     def _save_settings_from_ui(self):
@@ -790,7 +791,7 @@ class TaipoChatPlugin(GeneralPlugin):
         elif kind == "tool_result":
             blocks = event.get("content") or []
             has_image = any(b.get("type") == "image" for b in blocks)
-            if self._show_tool_results or has_image:
+            if self._debug_info or has_image:
                 is_error = bool(event.get("is_error"))
                 prefix = "[tool_result%s] %s:\n" % (
                     " error" if is_error else "",
@@ -804,7 +805,7 @@ class TaipoChatPlugin(GeneralPlugin):
                 )
                 for b in blocks:
                     btype = b.get("type")
-                    if btype == "text" and self._show_tool_results:
+                    if btype == "text" and self._debug_info:
                         self._append_plain_text((b.get("text") or "") + "\n")
                     elif btype == "image":
                         src = b.get("source") or {}
@@ -823,7 +824,7 @@ class TaipoChatPlugin(GeneralPlugin):
         elif kind == "usage_updated":
             self.w.tokenLabel.set(self._state.usage_caption())
         elif kind == "done":
-            if self._show_tool_results:
+            if self._debug_info:
                 reason = event.get("stop_reason") or "end_turn"
                 self._append_plain_text("\n[turn finished: %s]\n\n" % reason)
             self._plan_pending = False

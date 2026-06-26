@@ -38,8 +38,24 @@ def post_request(body, url, auth_value):
     req.add_header("Content-Type", "application/json")
     req.add_header("Authorization", "Bearer %s" % auth_value.strip())
     with urllib.request.urlopen(req, timeout=600, context=ssl_context()) as resp:
-        raw = resp.read().decode("utf-8", errors="replace")
-        return json.loads(raw) if raw else {}
+        raw_bytes = resp.read()
+        encoding = (resp.headers.get("Content-Encoding") or "").lower().strip()
+        if encoding == "gzip" or raw_bytes[:2] == b"\x1f\x8b":
+            import gzip as _gzip
+            try:
+                raw_bytes = _gzip.decompress(raw_bytes)
+            except Exception:
+                pass
+        raw = raw_bytes.decode("utf-8", errors="replace")
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            snippet = raw[:400].replace("\r\n", " ").replace("\n", " ")
+            raise ValueError(
+                "API response is not valid JSON (%s): %r" % (exc, snippet)
+            ) from exc
 
 
 def parse_response(payload):
@@ -144,41 +160,70 @@ def _convert_messages(neutral_messages, system_text):
     """
     Convert provider-neutral message list to OpenAI chat messages.
 
-    Handles:
-    - Injecting system message at the start
-    - Converting tool_result batches into individual tool messages
-    - Converting image content blocks from Anthropic format to OpenAI format
+    Images in tool results are not supported in the ``tool`` role by all models.
+    Instead, each image is replaced with a ``[TOOL_IMAGE_N]`` placeholder in the
+    tool message text, and a single ``user`` message is injected immediately after
+    the tool batch with interleaved ``(text: [TOOL_IMAGE_N])(image_url: data:...)``
+    blocks.  The counter N is global across the full conversation so placeholders
+    are unique and the model can correlate them across turns.
     """
     result = []
+    image_counter = [0]  # mutable box so the inner helper can increment it
 
-    # System message (if provided)
     if system_text:
         result.append({"role": "system", "content": system_text})
 
-    # Process each neutral message
     for msg in neutral_messages:
         role = msg.get("role")
 
         if role == "user":
             content = msg.get("content")
-            # Check if this is a tool result batch (list of tool_result blocks)
             if isinstance(content, list) and content and content[0].get("type") == "tool_result":
-                # Convert tool results to OpenAI tool messages
+                # --- tool result batch ---
+                # Collect (placeholder, img_block) for every image found across
+                # all tool results in this batch so we can build one user message.
+                pending_images = []
+
                 for block in content:
-                    if block.get("type") == "tool_result":
-                        tool_content = _convert_tool_result_content(block.get("content") or [])
-                        result.append({
-                            "role": "tool",
-                            "tool_call_id": block.get("tool_call_id") or "",
-                            "content": tool_content,
-                        })
+                    if block.get("type") != "tool_result":
+                        continue
+                    text_parts = []
+                    for b in block.get("content") or []:
+                        btype = b.get("type")
+                        if btype == "text":
+                            text_parts.append(b.get("text") or "")
+                        elif btype == "image":
+                            image_counter[0] += 1
+                            placeholder = "[TOOL_IMAGE_%d]" % image_counter[0]
+                            text_parts.append(placeholder)
+                            pending_images.append((placeholder, b))
+                    result.append({
+                        "role": "tool",
+                        "tool_call_id": block.get("tool_call_id") or "",
+                        "content": "\n".join(p for p in text_parts if p),
+                    })
+
+                # Inject one user message with interleaved text+image blocks.
+                if pending_images:
+                    user_content = []
+                    for placeholder, img_block in pending_images:
+                        user_content.append({"type": "text", "text": placeholder})
+                        src = img_block.get("source") or {}
+                        if src.get("type") == "base64":
+                            data_url = "data:%s;base64,%s" % (
+                                src.get("media_type", "image/png"),
+                                src.get("data", ""),
+                            )
+                            user_content.append({
+                                "type": "image_url",
+                                "image_url": {"url": data_url},
+                            })
+                    result.append({"role": "user", "content": user_content})
             else:
-                # Regular user message (text string or mixed content)
                 result.append({"role": "user", "content": content})
 
         elif role == "assistant":
             gpt_msg = {"role": "assistant"}
-            # Content is a list of content blocks (text, tool_use)
             content_blocks = msg.get("content") or []
             text_parts = []
             tool_uses = []
@@ -194,7 +239,7 @@ def _convert_messages(neutral_messages, system_text):
                         "function": {
                             "name": block.get("name") or "",
                             "arguments": json.dumps(block.get("input") or {}),
-                        }
+                        },
                     })
 
             if text_parts:
@@ -205,41 +250,6 @@ def _convert_messages(neutral_messages, system_text):
             result.append(gpt_msg)
 
     return result
-
-
-def _convert_tool_result_content(blocks):
-    """
-    Convert content blocks in a tool result from provider-neutral to OpenAI format.
-
-    Converts Anthropic image blocks to image_url blocks.
-    Handles text and image_url blocks in a list.
-    """
-    items = []
-    for b in blocks:
-        if not isinstance(b, dict):
-            continue
-        btype = b.get("type")
-        if btype == "text":
-            items.append({
-                "type": "text",
-                "text": b.get("text") or ""
-            })
-        elif btype == "image":
-            src = b.get("source") or {}
-            if src.get("type") == "base64":
-                data_url = "data:%s;base64,%s" % (src.get("media_type", "image/png"), src.get("data", ""))
-                items.append({
-                    "type": "image_url",
-                    "image_url": {"url": data_url}
-                })
-
-    # Return list if multiple items, single text string if only text, or list if mixed
-    if len(items) == 0:
-        return ""
-    elif len(items) == 1 and items[0].get("type") == "text":
-        return items[0].get("text", "")
-    else:
-        return items
 
 
 def _normalize_usage(usage):
