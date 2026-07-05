@@ -1,4 +1,4 @@
 # encoding: utf-8
 """Single source of truth for Taipo Chat version (also read by Hatch for ``pyproject.toml``)."""
 
-__version__ = "0.4.1"
+__version__ = "0.4.5"

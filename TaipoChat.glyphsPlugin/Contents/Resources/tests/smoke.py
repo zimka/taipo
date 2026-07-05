@@ -1,21 +1,32 @@
 # encoding: utf-8
 """
-Level-3 smoke tests. Safe to run inside Glyphs (Macro Panel) and — for the
-Glyphs-agnostic parts — also as a plain Python script.
+Smoke tests — no Glyphs.app required.
 
-How to run in Glyphs
---------------------
-1. Open the Macro Panel: **Window → Macro Panel** (or **⌥⌘M**).
-2. Paste, substituting the absolute path to the plugin's ``Resources`` folder:
+Run from the repo root::
 
-    import sys
-    sys.path.insert(0, "/Users/YOUR_NAME/my/grammafont_plugin/TaipoChat.glyphsPlugin/Contents/Resources")
-    import test
-    test.run_smoke()
+    uv run python TaipoChat.glyphsPlugin/Contents/Resources/tests/smoke.py
 
-A success line prints at the bottom; on failure an ``AssertionError`` with a
+On success a single OK line is printed; on failure an ``AssertionError`` with
 traceback is raised.
+
+For integration tests that need the real Glyphs SDK, see ``tests/glyphs.py``.
 """
+
+import os
+import sys
+
+_RESOURCES = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _RESOURCES not in sys.path:
+    sys.path.insert(0, _RESOURCES)
+
+from tests.mock import (
+    _MockComponent,
+    _MockGlyph,
+    _MockGlyphsList,
+    _MockLayer,
+    build_composite_mock_font,
+    build_mock_font,
+)
 
 
 def _test_utils_basics():
@@ -55,7 +66,6 @@ def _test_utils_basics():
 def _test_parse_provider_response():
     from provider import parse_response
 
-    # Tool use turn (OpenAI format)
     tool_payload = {
         "choices": [{
             "message": {
@@ -86,7 +96,6 @@ def _test_parse_provider_response():
     assert p["usage"]["input_tokens"] == 42
     assert p["usage"]["output_tokens"] == 11
 
-    # End turn (OpenAI format)
     end_payload = {
         "choices": [{
             "message": {
@@ -104,153 +113,15 @@ def _test_parse_provider_response():
     assert p["tool_uses"] == []
     assert p["stop_reason"] == "end_turn"
 
-    # Error response
     err_payload = {"error": {"type": "invalid_request_error", "message": "boom"}}
     p = parse_response(err_payload)
     assert p["error"] and "boom" in p["error"]
 
 
-class _FakeTransform:
-    """Minimal stand-in for NSAffineTransformStruct."""
-    def __init__(self, m11, m12, m21, m22, tX, tY):
-        self.m11 = m11; self.m12 = m12
-        self.m21 = m21; self.m22 = m22
-        self.tX = tX;   self.tY = tY
-
-
-class _FakeComponent:
-    def __init__(self, name, transform=(1, 0, 0, 1, 0, 0)):
-        self.componentName = name
-        self.transform = _FakeTransform(*transform)
-        self.position = _FakePosition(transform[4], transform[5])
-
-
-class _FakeAxis:
-    def __init__(self, name):
-        self.name = name
-
-
-class _FakeMaster:
-    def __init__(self, mid, name, axes=None):
-        self.id = mid
-        self.name = name
-        self.axes = list(axes or [])
-
-
-class _FakePosition:
-    def __init__(self, x, y):
-        self.x = x
-        self.y = y
-
-
-class _FakeNode:
-    def __init__(self, x, y, t="line", smooth=False):
-        self.position = _FakePosition(x, y)
-        self.type = t
-        self.smooth = smooth
-
-
-class _FakePath:
-    def __init__(self, nodes, closed=True):
-        self.nodes = list(nodes)
-        self.closed = closed
-
-
-class _FakeLayer:
-    def __init__(self, width, paths, anchors=None, components=None):
-        self.width = width
-        self.paths = list(paths)
-        self.anchors = list(anchors or [])
-        self.components = list(components or [])
-        self.completeBezierPath = None
-
-
-class _LayerMap:
-    def __init__(self, by_id):
-        self._by_id = dict(by_id)
-
-    def __getitem__(self, key):
-        return self._by_id.get(key)
-
-
-class _FakeGlyph:
-    def __init__(self, name, unicode_hex, layers_by_id):
-        self.name = name
-        self.unicode = unicode_hex
-        self.layers = _LayerMap(layers_by_id)
-
-
-class _FakeGlyphsList:
-    def __init__(self, glyphs):
-        self._glyphs = list(glyphs)
-        self._by_name = {g.name: g for g in self._glyphs}
-
-    def __iter__(self):
-        return iter(self._glyphs)
-
-    def __getitem__(self, key):
-        return self._by_name.get(key)
-
-
-class _FakeFont:
-    def __init__(self, upm=1000):
-        self.upm = upm
-        self.axes = [_FakeAxis("Weight")]
-        self.masters = []
-        self.glyphs = _FakeGlyphsList([])
-
-    def glyphForCharacter_(self, code):
-        for g in self.glyphs:
-            if g.unicode and int(g.unicode, 16) == code:
-                return g
-        return None
-
-
-def _build_fake_font():
-    m_regular = _FakeMaster("M_REG", "Regular", axes=[400])
-    m_bold = _FakeMaster("M_BOLD", "Bold", axes=[700])
-    font = _FakeFont(upm=1000)
-    font.masters = [m_regular, m_bold]
-
-    nodes_bold_dje = [
-        _FakeNode(100, 1230),
-        _FakeNode(800, 1230),
-        _FakeNode(800, 1420),
-        _FakeNode(100, 1420),
-    ]
-    layer_bold = _FakeLayer(width=1200, paths=[_FakePath(nodes_bold_dje)])
-    layer_regular = _FakeLayer(
-        width=1200,
-        paths=[_FakePath([_FakeNode(100, 1158), _FakeNode(800, 1158)])],
-    )
-    dje = _FakeGlyph(
-        "Dje-cy",
-        "0402",
-        {m_regular.id: layer_regular, m_bold.id: layer_bold},
-    )
-    font.glyphs = _FakeGlyphsList([dje])
-    return font
-
-
-def _build_composite_font():
-    """Font with Dje-cy (base) and Composite-cy (= Dje-cy with translation offset)."""
-    font = _build_fake_font()
-    # Composite: Dje-cy referenced with offset (100, 50)
-    comp = _FakeComponent("Dje-cy", transform=(1, 0, 0, 1, 100, 50))
-    comp_layer_reg = _FakeLayer(width=1400, paths=[], components=[comp])
-    composite_glyph = _FakeGlyph(
-        "Composite-cy", "FFFE",
-        {"M_REG": comp_layer_reg},
-    )
-    all_glyphs = list(font.glyphs) + [composite_glyph]
-    font.glyphs = _FakeGlyphsList(all_glyphs)
-    return font
-
-
 def _test_tool_handlers_pure():
     import tools
 
-    font = _build_fake_font()
+    font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
     out = tools.execute_tool("list_masters", {}, ctx)
@@ -259,13 +130,18 @@ def _test_tool_handlers_pure():
     out = tools.execute_tool("list_glyphs", {"filter": "dje"}, ctx)
     assert "Dje-cy" in out and "U+0402" in out
 
+    out = tools.execute_tool("list_glyphs", {"filter": "Ђ"}, ctx)
+    assert "Dje-cy" in out, "character filter 'Ђ' should match U+0402"
+
+    out = tools.execute_tool("list_glyphs", {"filter": "0402"}, ctx)
+    assert "Dje-cy" in out
+
     out = tools.execute_tool(
         "get_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx
     )
     assert "glyph: Dje-cy" in out
     assert "master: Bold" in out
     assert "paths: 1" in out
-    # New node format: x=... y=... (no parens, no comma)
     assert "x=100 y=1230" in out
     assert "x=100 y=1420" in out
 
@@ -286,7 +162,6 @@ def _test_tool_handlers_pure():
     ys = sorted(int(n.position.y) for n in layer.paths[0].nodes)
     assert ys == [1158, 1158, 1420, 1420], ys
 
-    # empty nodes list → error
     out = tools.execute_tool(
         "move_nodes",
         {
@@ -301,7 +176,6 @@ def _test_tool_handlers_pure():
     )
     assert out.startswith("[error]")
 
-    # out-of-range node index → error
     out = tools.execute_tool(
         "move_nodes",
         {
@@ -326,7 +200,6 @@ def _test_tool_handlers_pure():
 def _test_agent_loop_fake():
     from state import ChatState
 
-    # OpenAI-format responses
     script = [
         {
             "choices": [{
@@ -408,7 +281,7 @@ def _test_agent_loop_fake():
 def _test_snapshot_store_pure():
     import tools
 
-    font = _build_fake_font()
+    font = build_mock_font()
     store = tools.SnapshotStore()
     ctx = tools.ToolContext(font_provider=lambda: font, snapshot_store=store)
 
@@ -466,7 +339,6 @@ def _test_snapshot_store_pure():
 
 
 def _test_provider_image_injection_single():
-    """tool result with one image → tool msg has placeholder, user msg has image_url."""
     import base64
     from provider import _convert_messages
 
@@ -493,7 +365,6 @@ def _test_provider_image_injection_single():
     ]
 
     result = _convert_messages(msgs, "sys")
-    # system, assistant, tool, user(images)
     assert len(result) == 4, result
     assert result[0]["role"] == "system"
     assert result[1]["role"] == "assistant"
@@ -504,7 +375,6 @@ def _test_provider_image_injection_single():
     assert isinstance(tool_msg["content"], str), "tool content must be str"
     assert "[TOOL_IMAGE_1]" in tool_msg["content"]
     assert "render_specimen master=Regular" in tool_msg["content"]
-    # no raw base64 in tool message
     assert fake_b64 not in tool_msg["content"]
 
     img_msg = result[3]
@@ -519,7 +389,6 @@ def _test_provider_image_injection_single():
 
 
 def _test_provider_image_injection_no_images():
-    """tool result with text only → no injected user message."""
     from provider import _convert_messages
 
     msgs = [
@@ -542,7 +411,6 @@ def _test_provider_image_injection_no_images():
 
 
 def _test_provider_image_injection_multi_in_one_result():
-    """diff_pre_post returns 3 images: tool gets 3 placeholders, user gets 6 interleaved blocks."""
     import base64
     from provider import _convert_messages
 
@@ -588,7 +456,6 @@ def _test_provider_image_injection_multi_in_one_result():
     img_msg = result[1]
     assert img_msg["role"] == "user"
     uc = img_msg["content"]
-    # interleaved: text, image, text, image, text, image
     assert len(uc) == 6, uc
     assert uc[0] == {"type": "text", "text": "[TOOL_IMAGE_1]"}
     assert uc[1]["type"] == "image_url"
@@ -602,7 +469,6 @@ def _test_provider_image_injection_multi_in_one_result():
 
 
 def _test_provider_image_injection_global_counter():
-    """Counter is global: second batch continues from where the first left off."""
     import base64
     from provider import _convert_messages
 
@@ -624,10 +490,10 @@ def _test_provider_image_injection_global_counter():
 
     msgs = [
         assistant_tool_use("c1"),
-        user_result(tool_result("c1", img_block())),          # batch 1: 1 image → TOOL_IMAGE_1
+        user_result(tool_result("c1", img_block())),
         {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
         assistant_tool_use("c2"),
-        user_result(tool_result("c2", img_block(), img_block())),  # batch 2: 2 images → TOOL_IMAGE_2, TOOL_IMAGE_3
+        user_result(tool_result("c2", img_block(), img_block())),
     ]
 
     result = _convert_messages(msgs, "")
@@ -650,251 +516,58 @@ def _test_provider_image_injection_global_counter():
     assert img_user_msgs[1]["content"][2] == {"type": "text", "text": "[TOOL_IMAGE_3]"}
 
 
-def _make_judge_ctx(font):
+def _test_numeric_judge_new_helpers():
     import tools
-    return tools.ToolContext(
-        font_provider=lambda: font,
-        api_settings={
-            "baseUrl": "https://fake.example",
-            "apiKey": "token",
-            "model": "gpt-fake",
-        },
+
+    font = build_mock_font()
+    ctx = tools.ToolContext(font_provider=lambda: font)
+
+    code = """
+p0 = g['Dje-cy'][0]
+a = p0[0]
+b = p0[1]
+c = p0[2]
+
+print('angle_ab:', round(angle(a, b), 1))
+print('perp_dist:', round(perpendicular_distance(c, a, b), 1))
+
+proj = projection(c, a, b)
+print('proj_x:', round(proj['x'], 1))
+print('proj_y:', round(proj['y'], 1))
+
+mid = lerp(a, b, 0.5)
+print('lerp_x:', round(mid['x'], 1))
+
+ref = reflect(a, 450)
+print('reflect_x:', round(ref['x'], 1))
+
+t = tangent_at(p0, 0)
+print('tangent_dy:', round(t[1], 3))
+
+tp = transform_point(a, 1, 0, 0, 1, 50, 100)
+print('tp_x:', round(tp['x'], 1))
+print('tp_y:', round(tp['y'], 1))
+"""
+    result = tools.execute_tool(
+        "numeric_judge",
+        {"glyphs": ["Dje-cy"], "master": "Bold", "code": code},
+        ctx,
     )
-
-
-def _fake_render(_font, _master, _text, _contract):
-    return b"\x89PNG\r\n\x1a\n"
-
-
-def _make_judge_response(verdict, reasoning="ok"):
-    import json
-    content = json.dumps({"verdict": verdict, "reasoning": reasoning})
-    return {
-        "choices": [{"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 10},
-    }
-
-
-def _test_visually_judge_request_format():
-    """visually_judge sends a multimodal request with image_url and accusation text."""
-    import tools
-    import provider as pmod
-
-    font = _build_fake_font()
-    ctx = _make_judge_ctx(font)
-    original_render = tools._render_layer_run
-    original_post = pmod.post_request
-    captured = {}
-
-    def fake_post(body, url, auth_value):
-        captured["body"] = body
-        captured["url"] = url
-        captured["auth"] = auth_value
-        return _make_judge_response("TRUE", "Serif is clearly shorter.")
-
-    tools._render_layer_run = _fake_render
-    pmod.post_request = fake_post
-    try:
-        tools.execute_tool(
-            "visually_judge",
-            {"accusation": "The serif on n is too short.", "text": "n", "master": "Regular"},
-            ctx,
-        )
-    finally:
-        tools._render_layer_run = original_render
-        pmod.post_request = original_post
-
-    assert captured, "no HTTP call was made"
-    body = captured["body"]
-    msgs = body.get("messages", [])
-    assert any(m["role"] == "system" for m in msgs), "system message missing"
-    user_msg = next(m for m in msgs if m["role"] == "user")
-    assert isinstance(user_msg["content"], list), "user content must be a list"
-    img_block = next((b for b in user_msg["content"] if b.get("type") == "image_url"), None)
-    assert img_block is not None, "image_url block must be present"
-    assert "data:image/png;base64," in img_block["image_url"]["url"]
-    text_blocks = [b for b in user_msg["content"] if b.get("type") == "text"]
-    assert any("The serif on n is too short." in b.get("text", "") for b in text_blocks)
-    assert "v1/chat/completions" in captured["url"]
-    assert captured["auth"] == "token"
-
-
-def _test_visually_judge_valid_response():
-    """Valid JSON verdict is parsed and returned unchanged."""
-    import json
-    import tools
-    import provider as pmod
-
-    font = _build_fake_font()
-    ctx = _make_judge_ctx(font)
-    original_render = tools._render_layer_run
-    original_post = pmod.post_request
-    calls = {"n": 0}
-
-    def fake_post(body, url, auth_value):
-        calls["n"] += 1
-        return _make_judge_response("TRUE", "The serif is clearly shorter.")
-
-    tools._render_layer_run = _fake_render
-    pmod.post_request = fake_post
-    try:
-        result = tools.execute_tool(
-            "visually_judge",
-            {"accusation": "Serif too short.", "text": "n"},
-            ctx,
-        )
-    finally:
-        tools._render_layer_run = original_render
-        pmod.post_request = original_post
-
-    d = json.loads(result)
-    assert d["verdict"] == "TRUE"
-    assert "serif" in d["reasoning"].lower()
-    assert calls["n"] == 1, "should only call once for valid response"
-
-
-def _test_visually_judge_invalid_json_retries():
-    """Invalid JSON triggers exactly one retry; second valid response is returned."""
-    import json
-    import tools
-    import provider as pmod
-
-    font = _build_fake_font()
-    ctx = _make_judge_ctx(font)
-    original_render = tools._render_layer_run
-    original_post = pmod.post_request
-    calls = {"n": 0}
-
-    def fake_post(body, url, auth_value):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            content = "not json at all"
-        else:
-            content = '{"verdict": "FALSE", "reasoning": "Looks fine."}'
-        return {
-            "choices": [{"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
-        }
-
-    tools._render_layer_run = _fake_render
-    pmod.post_request = fake_post
-    try:
-        result = tools.execute_tool(
-            "visually_judge",
-            {"accusation": "Test accusation.", "text": "n"},
-            ctx,
-        )
-    finally:
-        tools._render_layer_run = original_render
-        pmod.post_request = original_post
-
-    assert calls["n"] == 2, "should have retried once, got %d calls" % calls["n"]
-    d = json.loads(result)
-    assert d["verdict"] == "FALSE"
-
-
-def _test_visually_judge_fallback_on_double_failure():
-    """Two consecutive invalid responses → safe fallback with UNCERTAIN verdict."""
-    import json
-    import tools
-    import provider as pmod
-
-    font = _build_fake_font()
-    ctx = _make_judge_ctx(font)
-    original_render = tools._render_layer_run
-    original_post = pmod.post_request
-
-    def fake_post(body, url, auth_value):
-        return {
-            "choices": [{"message": {"role": "assistant", "content": "not json"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
-        }
-
-    tools._render_layer_run = _fake_render
-    pmod.post_request = fake_post
-    try:
-        result = tools.execute_tool(
-            "visually_judge",
-            {"accusation": "Test.", "text": "a"},
-            ctx,
-        )
-    finally:
-        tools._render_layer_run = original_render
-        pmod.post_request = original_post
-
-    d = json.loads(result)
-    assert d["verdict"] == "UNCERTAIN", d
-    assert d["reasoning"]
-
-
-def _test_visually_judge_all_verdicts():
-    """All four verdict values (TRUE, FALSE, UNCERTAIN, INVALID) pass validation."""
-    import json
-    import tools
-    import provider as pmod
-
-    font = _build_fake_font()
-    ctx = _make_judge_ctx(font)
-    original_render = tools._render_layer_run
-    original_post = pmod.post_request
-
-    for verdict in ["TRUE", "FALSE", "UNCERTAIN", "INVALID"]:
-        def make_fake_post(v):
-            def fake_post(body, url, auth_value):
-                return _make_judge_response(v, "test reason")
-            return fake_post
-
-        tools._render_layer_run = _fake_render
-        pmod.post_request = make_fake_post(verdict)
-        try:
-            result = tools.execute_tool(
-                "visually_judge",
-                {"accusation": "Test.", "text": "a"},
-                ctx,
-            )
-        finally:
-            tools._render_layer_run = original_render
-            pmod.post_request = original_post
-
-        d = json.loads(result)
-        assert d["verdict"] == verdict, "expected %s, got %s" % (verdict, d["verdict"])
-
-
-def _test_visually_judge_no_mutations():
-    """visually_judge does not mutate snapshot or font geometry."""
-    import tools
-    import provider as pmod
-
-    font = _build_fake_font()
-    ctx = _make_judge_ctx(font)
-    original_render = tools._render_layer_run
-    original_post = pmod.post_request
-    mutations = []
-
-    original_save = ctx.snapshot_store.save
-
-    def tracked_save(*a, **kw):
-        mutations.append("save")
-        return original_save(*a, **kw)
-
-    ctx.snapshot_store.save = tracked_save
-
-    tools._render_layer_run = _fake_render
-    pmod.post_request = lambda body, url, auth: _make_judge_response("TRUE", "ok")
-    try:
-        tools.execute_tool("visually_judge", {"accusation": "Test.", "text": "a"}, ctx)
-    finally:
-        tools._render_layer_run = original_render
-        pmod.post_request = original_post
-
-    assert not mutations, "visually_judge must not mutate snapshot: %s" % mutations
+    assert "angle_ab: 0.0" in result, result
+    assert "perp_dist: 190.0" in result, result
+    assert "proj_x: 800.0" in result, result
+    assert "proj_y: 1230.0" in result, result
+    assert "lerp_x: 450.0" in result, result
+    assert "reflect_x: 800.0" in result, result
+    assert "tangent_dy: -1.0" in result, result
+    assert "tp_x: 150.0" in result, result
+    assert "tp_y: 1330.0" in result, result
 
 
 def _test_numeric_judge_basic():
-    """Sandbox g dict, bbox, and print output are correct."""
     import tools
 
-    font = _build_fake_font()
+    font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
     code = (
@@ -909,21 +582,19 @@ def _test_numeric_judge_basic():
         ctx,
     )
     assert "nodes: 4" in result, result
-    assert "x_range: 700" in result, result  # 800 - 100 = 700
+    assert "x_range: 700" in result, result
 
 
 def _test_numeric_judge_dist_and_area():
-    """dist() and area() helpers return correct values for a rectangular path."""
     import tools
 
-    font = _build_fake_font()
+    font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
-    # Bold Dje-cy path[0]: rect (100,1230)-(800,1230)-(800,1420)-(100,1420)
     code = (
         "p0 = g['Dje-cy'][0]\n"
-        "print('horiz:', int(dist(p0[0], p0[1])))\n"   # 800-100 = 700
-        "print('area:', int(area(p0)))\n"              # 700*190 = 133000
+        "print('horiz:', int(dist(p0[0], p0[1])))\n"
+        "print('area:', int(area(p0)))\n"
     )
     result = tools.execute_tool(
         "numeric_judge",
@@ -935,15 +606,14 @@ def _test_numeric_judge_dist_and_area():
 
 
 def _test_numeric_judge_runtime_error():
-    """Runtime error in snippet returns error message; output printed before error is included."""
     import tools
 
-    font = _build_fake_font()
+    font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
     code = (
         "print('before')\n"
-        "x = g['Dje-cy'][99][0]['x']\n"  # IndexError: path 99 does not exist
+        "x = g['Dje-cy'][99][0]['x']\n"
     )
     result = tools.execute_tool(
         "numeric_judge",
@@ -956,10 +626,9 @@ def _test_numeric_judge_runtime_error():
 
 
 def _test_numeric_judge_missing_glyph():
-    """Requesting a nonexistent glyph returns an error."""
     import tools
 
-    font = _build_fake_font()
+    font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
     result = tools.execute_tool(
@@ -972,10 +641,9 @@ def _test_numeric_judge_missing_glyph():
 
 
 def _test_numeric_judge_no_output_message():
-    """Code with no print() returns a helpful message."""
     import tools
 
-    font = _build_fake_font()
+    font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
     result = tools.execute_tool(
@@ -987,10 +655,9 @@ def _test_numeric_judge_no_output_message():
 
 
 def _test_numeric_judge_no_mutations():
-    """numeric_judge does not mutate font geometry or snapshot."""
     import tools
 
-    font = _build_fake_font()
+    font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
     original_save = ctx.snapshot_store.save
@@ -1005,7 +672,6 @@ def _test_numeric_judge_no_mutations():
     layer_bold = font.glyphs["Dje-cy"].layers["M_BOLD"]
     original_x = float(layer_bold.paths[0].nodes[0].position.x)
 
-    # Even if the snippet modifies the sandbox dict, the live font must be unchanged
     tools.execute_tool(
         "numeric_judge",
         {
@@ -1021,33 +687,27 @@ def _test_numeric_judge_no_mutations():
 
 
 def _test_get_glyph_component_transform():
-    """get_glyph shows component transform description and 'used as component in' for both glyphs."""
     import tools
 
-    font = _build_composite_font()
+    font = build_composite_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
-    # Composite: should show transform and report it is not used as a component itself
     out = tools.execute_tool("get_glyph", {"name": "Composite-cy", "master": "Regular"}, ctx)
     assert "components: 1" in out, out
     assert "Dje-cy" in out, out
     assert "offset=" in out or "identity" in out or "mirror" in out or "matrix=" in out, out
     assert "used as component in: (none)" in out, out
 
-    # Base glyph: should report Composite-cy uses it
     out2 = tools.execute_tool("get_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx)
     assert "used as component in (1): Composite-cy" in out2, out2
 
 
 def _test_numeric_judge_composite_transform():
-    """numeric_judge resolves component nodes with their transforms applied."""
     import tools
 
-    font = _build_composite_font()
+    font = build_composite_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
-    # Dje-cy Regular: single path with nodes at (100, 1158) and (800, 1158)
-    # Composite-cy = Dje-cy + offset (100, 50) → nodes at (200, 1208) and (900, 1208)
     code = (
         "p0 = g['Composite-cy'][0]\n"
         "print('component:', p0[0]['component'])\n"
@@ -1060,23 +720,20 @@ def _test_numeric_judge_composite_transform():
         ctx,
     )
     assert "component: Dje-cy" in result, result
-    assert "x0: 200" in result, result   # 100 + offset 100
-    assert "y0: 1208" in result, result  # 1158 + offset 50
+    assert "x0: 200" in result, result
+    assert "y0: 1208" in result, result
 
 
 def _test_numeric_judge_composite_mirror():
-    """numeric_judge applies mirror_x transform correctly."""
     import tools
 
-    # Build a font where the composite uses a horizontal mirror: m11=-1, tX=1000
-    font = _build_fake_font()
-    comp = _FakeComponent("Dje-cy", transform=(-1, 0, 0, 1, 1000, 0))
-    comp_layer = _FakeLayer(width=1000, paths=[], components=[comp])
-    mirrored = _FakeGlyph("Mirrored-cy", "FFFD", {"M_REG": comp_layer})
-    font.glyphs = _FakeGlyphsList(list(font.glyphs) + [mirrored])
+    font = build_mock_font()
+    comp = _MockComponent("Dje-cy", transform=(-1, 0, 0, 1, 1000, 0))
+    comp_layer = _MockLayer(width=1000, paths=[], components=[comp])
+    mirrored = _MockGlyph("Mirrored-cy", "FFFD", {"M_REG": comp_layer})
+    font.glyphs = _MockGlyphsList(list(font.glyphs) + [mirrored])
     ctx = tools.ToolContext(font_provider=lambda: font)
 
-    # Dje-cy Regular node at x=100 → mirrored: x = -1*100 + 1000 = 900
     code = (
         "p0 = g['Mirrored-cy'][0]\n"
         "print('x0:', p0[0]['x'])\n"
@@ -1090,10 +747,9 @@ def _test_numeric_judge_composite_mirror():
 
 
 def _test_get_glyph_no_component_uses():
-    """get_glyph on a glyph used by nobody shows the (none) line."""
     import tools
 
-    font = _build_fake_font()  # no composites
+    font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
     out = tools.execute_tool("get_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx)
@@ -1101,10 +757,9 @@ def _test_get_glyph_no_component_uses():
 
 
 def _test_render_glyph_missing_glyph():
-    """render_glyph returns an error for an unknown glyph name."""
     import tools
 
-    font = _build_fake_font()
+    font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
     result = tools.execute_tool(
@@ -1117,7 +772,7 @@ def _test_render_glyph_missing_glyph():
 
 
 def run_smoke():
-    """Single entry point: run all smoke tests that do not require a live Glyphs font."""
+    """Run all smoke tests that do not require a live Glyphs font."""
     _test_utils_basics()
     _test_parse_provider_response()
     _test_tool_handlers_pure()
@@ -1127,12 +782,7 @@ def run_smoke():
     _test_provider_image_injection_no_images()
     _test_provider_image_injection_multi_in_one_result()
     _test_provider_image_injection_global_counter()
-    _test_visually_judge_request_format()
-    _test_visually_judge_valid_response()
-    _test_visually_judge_invalid_json_retries()
-    _test_visually_judge_fallback_on_double_failure()
-    _test_visually_judge_all_verdicts()
-    _test_visually_judge_no_mutations()
+    _test_numeric_judge_new_helpers()
     _test_numeric_judge_basic()
     _test_numeric_judge_dist_and_area()
     _test_numeric_judge_runtime_error()
@@ -1144,7 +794,7 @@ def run_smoke():
     _test_get_glyph_no_component_uses()
     _test_numeric_judge_composite_transform()
     _test_numeric_judge_composite_mirror()
-    print("Taipo Chat Resources/test.py: run_smoke() OK")
+    print("Taipo Chat Resources/tests/smoke.py: run_smoke() OK")
 
 
 if __name__ == "__main__":

@@ -2,7 +2,8 @@
 """Conversation state and agent loop for Taipo Chat (no UI / Glyphs dependencies)."""
 
 import json
-import urllib.error
+
+from http_client import HTTPError
 
 from utils import (
     DEFAULT_BASE_URL,
@@ -13,6 +14,7 @@ from utils import (
     MAX_AGENT_ITERATIONS,
     _chat_endpoint,
     format_usage_caption,
+    load_default_system_prompt,
     normalize_tool_result_content,
     normalize_usage,
     parse_max_tokens,
@@ -24,7 +26,7 @@ _SETTINGS_KEYS = frozenset(
 )
 
 # Keys loaded from persisted defaults. ``systemPrompt`` is intentionally excluded during
-# active development so that edits to ``DEFAULT_SYSTEM_PROMPT`` always take effect after a
+# active development so that edits to ``assets/system_prompt.md`` take effect after a
 # Glyphs restart, without being shadowed by a stale value cached in ``Glyphs.defaults``.
 _PERSISTED_LOAD_KEYS = frozenset({"baseUrl", "apiKey", "model", "maxTokens"})
 
@@ -82,7 +84,7 @@ class ChatState:
         self._normalize_settings()
 
     def reset_system_prompt_to_default(self):
-        self.settings["systemPrompt"] = DEFAULT_SYSTEM_PROMPT
+        self.settings["systemPrompt"] = load_default_system_prompt()
 
     def validate_setting_errors(self):
         base = (self.settings.get("baseUrl") or "").strip()
@@ -146,7 +148,7 @@ class ChatState:
                     model, max_tokens, self._messages, system_text, tools=tool_schemas
                 )
                 payload = provider.post_request(body, url, auth)
-            except urllib.error.HTTPError as e:
+            except HTTPError as e:
                 try:
                     err_body = e.read().decode("utf-8", errors="replace")
                 except Exception:

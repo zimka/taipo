@@ -2,16 +2,15 @@
 """
 Agent tools for Taipo Chat.
 
-Twelve tools are exposed to the model via OpenAI ``tools`` parameter:
+Eleven tools are exposed to the model via OpenAI ``tools`` parameter:
 
 Read-only:
 - ``list_masters``       — enumerate masters of the current font.
 - ``list_glyphs``        — list glyph names (optional substring filter).
 - ``get_glyph``          — dump a glyph's paths/nodes/anchors/metrics as text.
 - ``render_specimen``    — rasterize a text using the current font state (returns PNG).
-- ``visually_judge``     — render specimen and ask a stateless VLM judge for a structured verdict.
 - ``render_glyph``       — render one glyph at large scale with node-index and path-label overlays.
-- ``numeric_judge``      — run a Python snippet in a geometry sandbox (node coords, dist/bbox/area helpers).
+- ``numeric_judge``      — run a Python snippet in a geometry sandbox (rich geometric helpers).
 
 Edit:
 - ``move_nodes``         — move specific nodes in a path by index and offset.
@@ -51,15 +50,22 @@ TOOL_SCHEMAS = [
     {
         "name": "list_glyphs",
         "description": (
-            "List glyph names in the current font. Optionally filter by a case-insensitive "
-            "substring match against glyph name or unicode value."
+            "List glyph names in the current font, optionally filtered.\n\n"
+            "Filter modes (all case-insensitive):\n"
+            "  By name substring:  filter='cy'     → Dje-cy, Zhe-cy, ...\n"
+            "  By unicode hex:     filter='0402'   → glyph at U+0402\n"
+            "  By character:       filter='Ђ'      → glyph at U+0402\n"
+            "  No filter:          returns all glyphs up to limit."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "filter": {
                     "type": "string",
-                    "description": "Optional substring, e.g. 'cy', 'Dje', '0402'.",
+                    "description": (
+                        "Optional. Name substring ('cy'), unicode hex ('0402'), "
+                        "or a literal character ('Ђ'). All modes are case-insensitive."
+                    ),
                 },
                 "limit": {
                     "type": "integer",
@@ -121,42 +127,6 @@ TOOL_SCHEMAS = [
         },
     },
     {
-        "name": "visually_judge",
-        "description": (
-            "Render the specimen text internally and send it to a stateless visual judge model "
-            "for perceptual evaluation. Provide a specific TRUE/FALSE accusation about the "
-            "font's visual state. The judge returns a structured verdict.\n\n"
-            "Use this BEFORE making changes to confirm an issue is real, and AFTER changes "
-            "to confirm the issue is resolved (accusation should then be FALSE).\n\n"
-            'Returns JSON: {"verdict": "TRUE|FALSE|UNCERTAIN|INVALID", "reasoning": "..."}\n'
-            "- TRUE: accusation is visually confirmed\n"
-            "- FALSE: accusation is visually refuted (use this to confirm DoD after a fix)\n"
-            "- UNCERTAIN: question is valid but answer is ambiguous\n"
-            "- INVALID: text doesn't contain referenced glyphs or accusation is not visually verifiable"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "accusation": {
-                    "type": "string",
-                    "description": (
-                        "A specific, visually verifiable TRUE/FALSE claim about the current font state. "
-                        "Example: 'The left serif of the lowercase n is shorter than the right serif.'"
-                    ),
-                },
-                "text": {
-                    "type": "string",
-                    "description": "Specimen text to render. Must contain the relevant glyphs.",
-                },
-                "master": {
-                    "type": "string",
-                    "description": "Master name or id. Defaults to the first master.",
-                },
-            },
-            "required": ["accusation", "text"],
-        },
-    },
-    {
         "name": "render_glyph",
         "description": (
             "Render a single glyph at large size with every node annotated by index number. "
@@ -189,15 +159,23 @@ TOOL_SCHEMAS = [
         "name": "numeric_judge",
         "description": (
             "Run a Python snippet in a read-only geometry sandbox to measure distances, "
-            "areas, or ratios from node coordinates. Use print() for output; the captured "
-            "stdout is returned. Runtime errors are returned as error messages.\n\n"
+            "areas, angles, or ratios from node coordinates. The primary tool for confirming "
+            "issues and validating fixes. Use print() for output; the captured stdout is "
+            "returned. Runtime errors are returned as error messages.\n\n"
             "Sandbox bindings:\n"
-            "  g[glyph_name][path_idx][node_idx] → {x, y, type, smooth}\n"
-            "  dist(a, b)         — Euclidean distance between two node dicts\n"
-            "  seg_len(path, i, j)— distance between node i and j in a path\n"
-            "  bbox(path)         — {x0, y0, x1, y1} of on-curve nodes\n"
-            "  area(path)         — shoelace area (on-curve nodes only)\n"
-            "  math               — full math module\n\n"
+            "  g[glyph_name][path_idx][node_idx] → {x, y, type, smooth, component}\n"
+            "  dist(a, b)                    — Euclidean distance between two node dicts\n"
+            "  seg_len(path, i, j)           — distance between nodes i and j in a path\n"
+            "  bbox(path)                    — {x0, y0, x1, y1} of on-curve nodes\n"
+            "  area(path)                    — shoelace area (on-curve nodes only)\n"
+            "  angle(a, b)                   — bearing in degrees from a to b, range (-180, 180]\n"
+            "  perpendicular_distance(p,a,b) — distance from node p to the line through a–b\n"
+            "  projection(p, a, b)           — {x,y} foot of perpendicular from p onto line a–b\n"
+            "  lerp(a, b, t)                 — {x,y} linear interpolation (t=0→a, t=1→b)\n"
+            "  reflect(node, axis_x)         — {x,y} mirror of node about the vertical x=axis_x\n"
+            "  tangent_at(path, node_idx)    — (dx,dy) unit tangent at a node; None for offcurve\n"
+            "  transform_point(node,m11,m12,m21,m22,tx,ty) — {x,y} affine transform\n"
+            "  math                          — full math module\n\n"
             "No imports. No file or network access."
         ),
         "input_schema": {
@@ -357,7 +335,15 @@ def _handle_list_masters(args, ctx, font):
 
 
 def _handle_list_glyphs(args, ctx, font):
-    flt = str(args.get("filter") or "").strip().lower()
+    raw_flt = str(args.get("filter") or "").strip()
+    flt = raw_flt.lower()
+
+    # If the filter is a single character, also match its unicode codepoint as a hex
+    # substring so e.g. filter='Ђ' matches the glyph whose unicode field is '0402'.
+    char_hex = None
+    if len(raw_flt) == 1:
+        char_hex = "%04X" % ord(raw_flt)
+
     try:
         limit = int(args.get("limit") or 200)
     except (TypeError, ValueError):
@@ -369,14 +355,17 @@ def _handle_list_glyphs(args, ctx, font):
         name = g.name or ""
         uni = (g.unicode or "") if hasattr(g, "unicode") else ""
         if flt:
-            if flt not in name.lower() and flt not in str(uni).lower():
+            uni_lower = str(uni).lower()
+            if (flt not in name.lower()
+                    and flt not in uni_lower
+                    and (char_hex is None or char_hex.lower() not in uni_lower)):
                 continue
         out.append("%s%s" % (name, (" U+" + uni) if uni else ""))
         if len(out) >= limit:
             break
     if not out:
-        return "(no glyphs matched filter=%r)" % flt
-    header = "glyphs (%d shown%s):" % (len(out), ", filter=%r" % flt if flt else "")
+        return "(no glyphs matched filter=%r)" % raw_flt
+    header = "glyphs (%d shown%s):" % (len(out), ", filter=%r" % raw_flt if flt else "")
     return header + "\n" + "\n".join(out)
 
 
@@ -613,158 +602,6 @@ def _handle_render_diff(args, ctx, font):
     return [header, overlay_png]
 
 
-def _handle_visually_judge(args, ctx, font):
-    import base64
-    import json as _json
-
-    accusation = str(args.get("accusation") or "").strip()
-    text = str(args.get("text") or "").strip()
-    if not accusation:
-        return "[error] 'accusation' is required."
-    if not text:
-        return "[error] 'text' is required."
-
-    master = _resolve_master(font, args.get("master"))
-    if master is None:
-        return "[error] Master not found: %s" % args.get("master")
-
-    api_settings = getattr(ctx, "api_settings", None) or {}
-    base_url = str(api_settings.get("baseUrl") or "").strip()
-    api_key = str(api_settings.get("apiKey") or "").strip()
-    model = str(api_settings.get("model") or "").strip()
-
-    if not base_url:
-        return "[error] visually_judge: no base URL configured."
-    if not api_key:
-        return "[error] visually_judge: no API key configured."
-    if not model:
-        return "[error] visually_judge: no model configured."
-
-    judge_contract = dict(ctx.render_contract)
-    judge_contract["em_px"] = _JUDGE_EM_PX
-    try:
-        png_bytes = _render_layer_run(font, master, text, judge_contract)
-    except Exception as e:
-        return "[error] visually_judge: render failed: %s" % e
-
-    b64 = base64.b64encode(png_bytes).decode("ascii")
-    data_url = "data:image/png;base64,%s" % b64
-
-    # Collect full glyph geometry for every unique character in text.
-    glyph_dumps = []
-    seen_chars = set()
-    for ch in text:
-        if ch in seen_chars:
-            continue
-        seen_chars.add(ch)
-        g = _lookup_char(font, ch)
-        if g is None:
-            continue
-        try:
-            lyr = g.layers[master.id]
-        except Exception:
-            lyr = None
-        if lyr is None:
-            continue
-        glyph_dumps.append(_dump_layer(g, master, lyr))
-
-    _JUDGE_SYSTEM = (
-        "You are a type-design visual reviewer.\n"
-        "Your task: evaluate whether the stated accusation is true for the current font state.\n"
-        "You are given both a rendered image and exact glyph geometry (paths, node coordinates).\n"
-        "Use both: the image for overall visual impression, the geometry for precise measurements.\n"
-        "Focus on: stroke thickness, serif dimensions, counter openness,\n"
-        "spacing, optical weight, rhythm, proportions.\n"
-        "Be accurate and unbiased — report what you observe.\n"
-        "Do not lean toward confirming or denying.\n"
-        'Return ONLY valid JSON: {"verdict": "...", "reasoning": "..."}\n'
-        "verdict must be exactly one of: TRUE, FALSE, UNCERTAIN, INVALID\n"
-        "Do not include markdown fences or extra keys."
-    )
-
-    _VALID_VERDICTS = {"TRUE", "FALSE", "UNCERTAIN", "INVALID"}
-    _FALLBACK = _json.dumps({
-        "verdict": "UNCERTAIN",
-        "reasoning": "Judge could not produce a valid response.",
-    })
-
-    def _validate(raw):
-        raw = (raw or "").strip()
-        if raw.startswith("```"):
-            lines = raw.split("\n")
-            raw = "\n".join(l for l in lines if not l.startswith("```")).strip()
-        try:
-            d = _json.loads(raw)
-        except (ValueError, TypeError):
-            return None
-        if not isinstance(d, dict):
-            return None
-        if d.get("verdict") not in _VALID_VERDICTS:
-            return None
-        if not isinstance(d.get("reasoning"), str):
-            return None
-        return _json.dumps({"verdict": d["verdict"], "reasoning": d["reasoning"]})
-
-    from utils import _chat_endpoint
-    import provider as _pmod
-
-    url = _chat_endpoint(base_url)
-
-    user_text_parts = ["Accusation: %s" % accusation]
-    if glyph_dumps:
-        user_text_parts.append("Glyph geometry:\n\n" + "\n\n".join(glyph_dumps))
-    user_text_parts.append(
-        "Does the image and glyph geometry confirm this accusation?"
-    )
-    user_text = "\n\n".join(user_text_parts)
-
-    def _call(prompt_text):
-        body = {
-            "model": model,
-            "max_completion_tokens": 512,
-            "messages": [
-                {"role": "system", "content": _JUDGE_SYSTEM},
-                {"role": "user", "content": [
-                    {"type": "text", "text": prompt_text},
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                ]},
-            ],
-        }
-        return _pmod.post_request(body, url, api_key)
-
-    try:
-        payload = _call(user_text)
-    except Exception as e:
-        return "[error] visually_judge: HTTP error: %s" % e
-
-    parsed = _pmod.parse_response(payload)
-    if parsed.get("error"):
-        return "[error] visually_judge: %s" % parsed["error"]
-
-    result = _validate(parsed.get("text") or "")
-    if result is not None:
-        return result
-
-    # Retry once with explicit reprompt
-    retry_text = (
-        user_text
-        + "\n\nYour previous response was not valid JSON. "
-        'Return ONLY valid JSON with verdict and reasoning keys. '
-        'Example: {"verdict": "TRUE", "reasoning": "The counter is clearly too tight."}'
-    )
-    try:
-        payload2 = _call(retry_text)
-    except Exception:
-        return _FALLBACK
-
-    parsed2 = _pmod.parse_response(payload2)
-    if parsed2.get("error"):
-        return _FALLBACK
-
-    result2 = _validate(parsed2.get("text") or "")
-    return result2 if result2 is not None else _FALLBACK
-
-
 def _handle_numeric_judge(args, ctx, font):
     import builtins
     import contextlib
@@ -878,6 +715,85 @@ def _handle_numeric_judge(args, ctx, font):
         )
         return abs(s) / 2.0
 
+    def angle(a, b):
+        """Bearing in degrees from node a to node b. Range: (-180, 180]."""
+        return _math.degrees(_math.atan2(b["y"] - a["y"], b["x"] - a["x"]))
+
+    def perpendicular_distance(p, a, b):
+        """Distance from node p to the infinite line through a and b.
+
+        Correct for measuring stem width along any stroke direction.
+        Returns dist(p, a) if a and b coincide.
+        """
+        dx = b["x"] - a["x"]
+        dy = b["y"] - a["y"]
+        mag = _math.sqrt(dx * dx + dy * dy)
+        if mag < 1e-10:
+            return dist(p, a)
+        return abs(dx * (a["y"] - p["y"]) - (a["x"] - p["x"]) * dy) / mag
+
+    def projection(p, a, b):
+        """Foot of the perpendicular from node p onto the line through a and b.
+
+        Returns a node dict {x, y} at the closest point on the line.
+        """
+        dx = b["x"] - a["x"]
+        dy = b["y"] - a["y"]
+        mag2 = dx * dx + dy * dy
+        if mag2 < 1e-10:
+            return {"x": float(a["x"]), "y": float(a["y"])}
+        t = ((p["x"] - a["x"]) * dx + (p["y"] - a["y"]) * dy) / mag2
+        return {"x": a["x"] + t * dx, "y": a["y"] + t * dy}
+
+    def lerp(a, b, t):
+        """Linear interpolation between nodes a and b at parameter t.
+
+        t=0 returns a, t=1 returns b, t=0.5 returns the midpoint.
+        Returns a node dict {x, y}.
+        """
+        return {
+            "x": a["x"] + t * (b["x"] - a["x"]),
+            "y": a["y"] + t * (b["y"] - a["y"]),
+        }
+
+    def reflect(node, axis_x):
+        """Mirror node about the vertical line x = axis_x.
+
+        Returns a node dict {x, y}.
+        """
+        return {"x": 2.0 * axis_x - node["x"], "y": float(node["y"])}
+
+    def tangent_at(path, node_idx):
+        """Unit tangent vector (dx, dy) at node_idx in path.
+
+        For curve nodes: direction from the preceding offcurve handle to the node.
+        For line nodes: direction of the incoming segment.
+        Returns None for offcurve nodes (undefined).
+        Returns (0.0, 0.0) if the segment has zero length.
+        """
+        n = len(path)
+        node = path[node_idx]
+        if node.get("type") == "offcurve":
+            return None
+        prev = path[(node_idx - 1) % n]
+        dx = node["x"] - prev["x"]
+        dy = node["y"] - prev["y"]
+        mag = _math.sqrt(dx * dx + dy * dy)
+        if mag < 1e-10:
+            return (0.0, 0.0)
+        return (dx / mag, dy / mag)
+
+    def transform_point(node, m11, m12, m21, m22, tx, ty):
+        """Apply a 2-D affine transform to a node dict.
+
+        Same convention as GSComponent.transform:
+          x' = m11*x + m21*y + tx
+          y' = m12*x + m22*y + ty
+        Returns a node dict {x, y}.
+        """
+        x, y = float(node["x"]), float(node["y"])
+        return {"x": m11 * x + m21 * y + tx, "y": m12 * x + m22 * y + ty}
+
     _SAFE_BUILTINS = {
         k: getattr(builtins, k)
         for k in (
@@ -896,6 +812,13 @@ def _handle_numeric_judge(args, ctx, font):
         "seg_len": seg_len,
         "bbox": bbox,
         "area": area,
+        "angle": angle,
+        "perpendicular_distance": perpendicular_distance,
+        "projection": projection,
+        "lerp": lerp,
+        "reflect": reflect,
+        "tangent_at": tangent_at,
+        "transform_point": transform_point,
     }
 
     buf = io.StringIO()
@@ -917,7 +840,6 @@ _HANDLERS = {
     "list_glyphs": _handle_list_glyphs,
     "get_glyph": _handle_get_glyph,
     "render_specimen": _handle_render_specimen,
-    "visually_judge": _handle_visually_judge,
     "render_glyph": _handle_render_glyph,
     "numeric_judge": _handle_numeric_judge,
     "move_nodes": _handle_move_nodes,
@@ -1023,6 +945,46 @@ def _point(x, y):
 # ---------------------------------------------------------------------------
 
 
+def _anchor_name(anchor):
+    try:
+        return str(anchor.name)
+    except Exception:
+        return None
+
+
+def _iter_layer_anchors(layer):
+    """Yield GSAnchor objects from ``layer.anchors``.
+
+    Glyphs 3 exposes anchors as a list of GSAnchor. Glyphs 4 exposes an NSDictionary
+    where iteration yields anchor name strings; resolve via ``anchorForName_`` or subscript.
+    """
+    raw = getattr(layer, "anchors", None)
+    if not raw:
+        return
+    anchor_for_name = getattr(layer, "anchorForName_", None)
+    for item in raw:
+        if hasattr(item, "position"):
+            yield item
+            continue
+        nm = str(item)
+        anchor = None
+        if anchor_for_name is not None:
+            try:
+                anchor = anchor_for_name(nm)
+            except Exception:
+                anchor = None
+        if anchor is None:
+            try:
+                anchor = raw[nm]
+            except Exception:
+                try:
+                    anchor = raw[item]
+                except Exception:
+                    anchor = None
+        if anchor is not None and hasattr(anchor, "position"):
+            yield anchor
+
+
 def _snapshot_layer_data(layer):
     paths = []
     for path in (layer.paths or []):
@@ -1033,11 +995,8 @@ def _snapshot_layer_data(layer):
             )
         paths.append({"nodes": nodes})
     anchors = []
-    for anchor in (getattr(layer, "anchors", None) or []):
-        try:
-            nm = anchor.name
-        except Exception:
-            nm = None
+    for anchor in _iter_layer_anchors(layer):
+        nm = _anchor_name(anchor)
         if not nm:
             continue
         anchors.append(
@@ -1073,11 +1032,8 @@ def _apply_layer_data(layer, data):
     snap_anchors_by_name = {
         a["name"]: a for a in (data.get("anchors") or []) if a.get("name")
     }
-    for anchor in (getattr(layer, "anchors", None) or []):
-        try:
-            nm = anchor.name
-        except Exception:
-            nm = None
+    for anchor in _iter_layer_anchors(layer):
+        nm = _anchor_name(anchor)
         if not nm:
             continue
         sa = snap_anchors_by_name.get(nm)
@@ -1233,12 +1189,13 @@ def _dump_layer(glyph, master, layer, font=None):
                 # line node (default on-curve) — no type keyword
                 lines.append("    node[%d] x=%s y=%s%s" % (ni, x, y, smooth))
 
-    anchors = list(getattr(layer, "anchors", []) or [])
+    anchors = list(_iter_layer_anchors(layer))
     lines.append("anchors: %d" % len(anchors))
     for a in anchors:
+        nm = _anchor_name(a) or "?"
         lines.append(
             "  %s (x=%s, y=%s)"
-            % (a.name, _fmt_num(a.position.x), _fmt_num(a.position.y))
+            % (nm, _fmt_num(a.position.x), _fmt_num(a.position.y))
         )
     comps = list(getattr(layer, "components", []) or [])
     lines.append("components: %d" % len(comps))
@@ -1435,14 +1392,11 @@ def _guide_color_ycbcr(idx, n, y=0.55, radius=0.25):
     return max(0.0, min(1.0, r)), max(0.0, min(1.0, g)), max(0.0, min(1.0, b))
 
 
-# Render settings shared by render_specimen and visually_judge.
+# Render settings.
 _RENDER_GUIDE_STEP = 32   # pixels between horizontal guide lines
 _RENDER_PAD_FRAC = 0.06   # side padding as a fraction of text advance width
 
-# visually_judge renders at a larger size for clearer stroke detail.
-_JUDGE_EM_PX = 240.0
-
-# render_glyph renders at an even larger size so node labels are readable.
+# render_glyph renders at a large size so node labels are readable.
 _GLYPH_RENDER_EM_PX = 400.0
 
 # Per-path color palette for render_glyph (7 distinct colors, equal visual weight).

@@ -130,6 +130,32 @@ New versions are published on **[Releases](https://github.com/zimka/taipo/releas
 
 Developers can browse or contribute in the **[taipo](https://github.com/zimka/taipo)** repository on GitHub.
 
+### Running tests
+
+All tests live under `TaipoChat.glyphsPlugin/Contents/Resources/tests/`:
+
+| File | Purpose |
+|------|---------|
+| `smoke.py` | API/tool smoke tests (mock fonts, no Glyphs) |
+| `glyphs.py` | Glyphs 3/4 integration tests (Macro Panel) |
+| `mock.py` | Mock font/layer graph for smoke tests |
+| `_glyphs_sdk.py` | GlyphsApp import helpers and cross-version factories |
+
+**Smoke tests** (no Glyphs required):
+
+```bash
+uv run python TaipoChat.glyphsPlugin/Contents/Resources/tests/smoke.py
+```
+
+**Glyphs integration tests** (Glyphs 3 or 4 Macro Panel, font open):
+
+```python
+import sys; sys.path.insert(0, "/ABS/PATH/TaipoChat.glyphsPlugin/Contents/Resources")
+import tests; tests.run_glyphs_tests()
+```
+
+The default agent system prompt is in [`assets/system_prompt.md`](assets/system_prompt.md) (also bundled under `TaipoChat.glyphsPlugin/Contents/Resources/assets/` for installed plugins). Edit that file and restart Glyphs to pick up changes.
+
 ## License
 
 Taipo Chat is licensed under the [MIT License](./LICENSE). See the LICENSE file for details.

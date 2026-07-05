@@ -89,7 +89,7 @@ def _load_persistent_settings(state):
     """Load baseUrl / apiKey / model / maxTokens from Glyphs.defaults.
 
     ``systemPrompt`` is intentionally NOT loaded during active development, so that updates
-    to ``DEFAULT_SYSTEM_PROMPT`` in :mod:`utils` take effect on the next Glyphs launch.
+    to ``assets/system_prompt.md`` take effect on the next Glyphs launch.
     """
     blob = _get_default("settingsJson", "")
     if blob and str(blob).strip():

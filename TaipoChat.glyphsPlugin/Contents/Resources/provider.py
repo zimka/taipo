@@ -3,10 +3,8 @@
 
 import base64
 import json
-import ssl
-import urllib.request
 
-from utils import ssl_context
+from http_client import requests_post
 
 
 def build_request_body(model, max_tokens, messages, system_text, tools=None):
@@ -34,28 +32,33 @@ def post_request(body, url, auth_value):
     Returns parsed JSON response dict.
     """
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method="POST")
-    req.add_header("Content-Type", "application/json")
-    req.add_header("Authorization", "Bearer %s" % auth_value.strip())
-    with urllib.request.urlopen(req, timeout=600, context=ssl_context()) as resp:
-        raw_bytes = resp.read()
-        encoding = (resp.headers.get("Content-Encoding") or "").lower().strip()
-        if encoding == "gzip" or raw_bytes[:2] == b"\x1f\x8b":
-            import gzip as _gzip
-            try:
-                raw_bytes = _gzip.decompress(raw_bytes)
-            except Exception:
-                pass
-        raw = raw_bytes.decode("utf-8", errors="replace")
-        if not raw:
-            return {}
+    resp = requests_post(
+        url,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer %s" % auth_value.strip(),
+        },
+        timeout=600,
+    )
+    raw_bytes = resp.content
+    encoding = (resp.headers.get("Content-Encoding") or "").lower().strip()
+    if encoding == "gzip" or raw_bytes[:2] == b"\x1f\x8b":
+        import gzip as _gzip
         try:
-            return json.loads(raw)
-        except json.JSONDecodeError as exc:
-            snippet = raw[:400].replace("\r\n", " ").replace("\n", " ")
-            raise ValueError(
-                "API response is not valid JSON (%s): %r" % (exc, snippet)
-            ) from exc
+            raw_bytes = _gzip.decompress(raw_bytes)
+        except Exception:
+            pass
+    raw = raw_bytes.decode("utf-8", errors="replace")
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        snippet = raw[:400].replace("\r\n", " ").replace("\n", " ")
+        raise ValueError(
+            "API response is not valid JSON (%s): %r" % (exc, snippet)
+        ) from exc
 
 
 def parse_response(payload):
