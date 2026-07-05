@@ -26,6 +26,8 @@ _RESOURCES = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _RESOURCES not in sys.path:
     sys.path.insert(0, _RESOURCES)
 
+from tests.execute_tool import execute_tool
+
 TEST_GLYPH_NAME = "_TaipoTest"
 TEST_ANCHOR_NAME = "top"
 TEST_ANCHOR_X = 200.0
@@ -190,17 +192,19 @@ def _test_get_glyph_anchors():
     font = _open_font()
     with _TaipoTestFixture(font) as (glyph, master, layer):
         ctx = _tool_context(font)
-        out = tools.execute_tool(
+        out = execute_tool(
             "get_glyph",
             {"name": glyph.name, "master": master.name},
             ctx,
         )
         assert "glyph: %s" % TEST_GLYPH_NAME in out, out
         assert "anchors: 1" in out, out
+        from tools.formatting import fmt_num
+
         assert "  %s (x=%s, y=%s)" % (
             TEST_ANCHOR_NAME,
-            tools._fmt_num(TEST_ANCHOR_X),
-            tools._fmt_num(TEST_ANCHOR_Y),
+            fmt_num(TEST_ANCHOR_X),
+            fmt_num(TEST_ANCHOR_Y),
         ) in out, out
 
 
@@ -213,7 +217,7 @@ def _test_snapshot_anchors_roundtrip():
         store = tools.SnapshotStore()
         ctx.snapshot_store = store
 
-        out = tools.execute_tool(
+        out = execute_tool(
             "save_snapshot",
             {"glyph_names": [glyph.name]},
             ctx,
@@ -224,7 +228,7 @@ def _test_snapshot_anchors_roundtrip():
         assert anchor is not None, "test anchor missing"
         anchor.position = (TEST_ANCHOR_X + 50, TEST_ANCHOR_Y + 25)
 
-        out = tools.execute_tool("reset_snapshot", {}, ctx)
+        out = execute_tool("reset_snapshot", {}, ctx)
         assert "Snapshot restored" in out, out
 
         anchor = layer.anchorForName_(TEST_ANCHOR_NAME)
@@ -239,7 +243,7 @@ def _test_render_glyph_png():
     font = _open_font()
     with _TaipoTestFixture(font) as (glyph, master, layer):
         ctx = _tool_context(font)
-        result = tools.execute_tool(
+        result = execute_tool(
             "render_glyph",
             {"name": glyph.name, "master": master.name, "size": 256},
             ctx,

@@ -21,7 +21,8 @@ from GlyphsApp import Glyphs, WINDOW_MENU
 from GlyphsApp.plugins import GeneralPlugin
 from vanilla import Button, CheckBox, EditText, TextBox, TextEditor, Window
 
-import tools
+from tools import DEFAULT_RENDER_CONTRACT, SnapshotStore, ToolContext
+from tools.model_toolset import ModelToolset
 from _version import __version__ as PLUGIN_VERSION
 from state import ChatState, migration_default_strings
 from utils import (
@@ -172,12 +173,14 @@ class TaipoChatPlugin(GeneralPlugin):
         return Glyphs.font
 
     @objc.python_method
-    def _build_tool_context(self):
-        return tools.ToolContext(
-            font_provider=self._font_provider,
-            render_contract=tools.DEFAULT_RENDER_CONTRACT,
-            snapshot_store=tools.SnapshotStore(),
-            api_settings=self._state.settings,
+    def _build_toolset(self):
+        return ModelToolset(
+            ToolContext(
+                font_provider=self._font_provider,
+                render_contract=DEFAULT_RENDER_CONTRACT,
+                snapshot_store=SnapshotStore(),
+                api_settings=self._state.settings,
+            )
         )
 
     @objc.python_method
@@ -374,7 +377,7 @@ class TaipoChatPlugin(GeneralPlugin):
         )
         self._state = ChatState()
         _load_persistent_settings(self._state)
-        self._tool_ctx = self._build_tool_context()
+        self._toolset = self._build_toolset()
         self._cancel_event = None
         self._worker_busy = False
         self._plan_pending = False
@@ -625,12 +628,12 @@ class TaipoChatPlugin(GeneralPlugin):
 
     @objc.python_method
     def _has_snapshot(self):
-        store = getattr(self._tool_ctx, "snapshot_store", None)
+        store = getattr(self._toolset.ctx, "snapshot_store", None)
         return bool(store and store.has_snapshot())
 
     @objc.python_method
     def _before_edit_caption(self):
-        store = getattr(self._tool_ctx, "snapshot_store", None)
+        store = getattr(self._toolset.ctx, "snapshot_store", None)
         if not store or not store.has_snapshot():
             return "Before: none"
         names = list(getattr(store, "_glyph_names", []) or [])
@@ -862,7 +865,7 @@ class TaipoChatPlugin(GeneralPlugin):
 
     @objc.python_method
     def _tool_executor(self, name, args):
-        return _run_on_main_sync(lambda: tools.execute_tool(name, args, self._tool_ctx))
+        return _run_on_main_sync(lambda: self._toolset.execute(name, args))
 
     @objc.python_method
     def _start_turn(self, user_text):
@@ -884,7 +887,7 @@ class TaipoChatPlugin(GeneralPlugin):
                 self._state.run_agent_turn(
                     user_text=user_text,
                     tool_executor=self._tool_executor,
-                    tool_schemas=tools.TOOL_SCHEMAS,
+                    tool_schemas=ModelToolset.schemas(),
                     on_event=self._dispatch_event,
                     cancel_event=self._cancel_event,
                 )
@@ -930,7 +933,7 @@ class TaipoChatPlugin(GeneralPlugin):
     def _on_reset_snapshot_(self, sender):
         if self._worker_busy:
             return
-        store = getattr(self._tool_ctx, "snapshot_store", None)
+        store = getattr(self._toolset.ctx, "snapshot_store", None)
         if store is None or not store.has_snapshot():
             self._refresh_control_ui()
             return
@@ -965,7 +968,7 @@ class TaipoChatPlugin(GeneralPlugin):
         self._plan_pending = False
         self._editing_mode = False
         self._status_override = None
-        store = getattr(self._tool_ctx, "snapshot_store", None)
+        store = getattr(self._toolset.ctx, "snapshot_store", None)
         if store is not None:
             store.clear()
         self._refresh_setup_ui()

@@ -19,6 +19,7 @@ _RESOURCES = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _RESOURCES not in sys.path:
     sys.path.insert(0, _RESOURCES)
 
+from tests.execute_tool import execute_tool
 from tests.mock import (
     _MockComponent,
     _MockGlyph,
@@ -124,19 +125,19 @@ def _test_tool_handlers_pure():
     font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
-    out = tools.execute_tool("list_masters", {}, ctx)
+    out = execute_tool("list_masters", {}, ctx)
     assert "Regular" in out and "Bold" in out and "M_BOLD" in out
 
-    out = tools.execute_tool("list_glyphs", {"filter": "dje"}, ctx)
+    out = execute_tool("list_glyphs", {"filter": "dje"}, ctx)
     assert "Dje-cy" in out and "U+0402" in out
 
-    out = tools.execute_tool("list_glyphs", {"filter": "Ђ"}, ctx)
+    out = execute_tool("list_glyphs", {"filter": "Ђ"}, ctx)
     assert "Dje-cy" in out, "character filter 'Ђ' should match U+0402"
 
-    out = tools.execute_tool("list_glyphs", {"filter": "0402"}, ctx)
+    out = execute_tool("list_glyphs", {"filter": "0402"}, ctx)
     assert "Dje-cy" in out
 
-    out = tools.execute_tool(
+    out = execute_tool(
         "get_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx
     )
     assert "glyph: Dje-cy" in out
@@ -145,7 +146,7 @@ def _test_tool_handlers_pure():
     assert "x=100 y=1230" in out
     assert "x=100 y=1420" in out
 
-    out = tools.execute_tool(
+    out = execute_tool(
         "move_nodes",
         {
             "glyph": "Dje-cy",
@@ -162,7 +163,7 @@ def _test_tool_handlers_pure():
     ys = sorted(int(n.position.y) for n in layer.paths[0].nodes)
     assert ys == [1158, 1158, 1420, 1420], ys
 
-    out = tools.execute_tool(
+    out = execute_tool(
         "move_nodes",
         {
             "glyph": "Dje-cy",
@@ -176,7 +177,7 @@ def _test_tool_handlers_pure():
     )
     assert out.startswith("[error]")
 
-    out = tools.execute_tool(
+    out = execute_tool(
         "move_nodes",
         {
             "glyph": "Dje-cy",
@@ -190,10 +191,10 @@ def _test_tool_handlers_pure():
     )
     assert out.startswith("[error]")
 
-    out = tools.execute_tool("get_glyph", {"name": "Missing"}, ctx)
+    out = execute_tool("get_glyph", {"name": "Missing"}, ctx)
     assert out.startswith("[error]")
 
-    out = tools.execute_tool("unknown_tool", {}, ctx)
+    out = execute_tool("unknown_tool", {}, ctx)
     assert out.startswith("[error] Unknown tool")
 
 
@@ -287,17 +288,17 @@ def _test_snapshot_store_pure():
 
     assert not store.has_snapshot()
 
-    out = tools.execute_tool("reset_snapshot", {}, ctx)
+    out = execute_tool("reset_snapshot", {}, ctx)
     assert out.startswith("[error]"), out
-    out = tools.execute_tool("render_diff", {"text": "Ђ"}, ctx)
+    out = execute_tool("render_diff", {"text": "Ђ"}, ctx)
     assert out.startswith("[error]") and "snapshot" in out.lower(), out
 
-    out = tools.execute_tool("save_snapshot", {"glyph_names": []}, ctx)
+    out = execute_tool("save_snapshot", {"glyph_names": []}, ctx)
     assert out.startswith("[error]"), out
-    out = tools.execute_tool("save_snapshot", {"glyph_names": ["NoSuch"]}, ctx)
+    out = execute_tool("save_snapshot", {"glyph_names": ["NoSuch"]}, ctx)
     assert out.startswith("[error]") and "NoSuch" in out, out
 
-    out = tools.execute_tool("save_snapshot", {"glyph_names": ["Dje-cy"]}, ctx)
+    out = execute_tool("save_snapshot", {"glyph_names": ["Dje-cy"]}, ctx)
     assert "Snapshot saved" in out, out
     assert store.has_snapshot()
     assert store._glyph_names == ["Dje-cy"]
@@ -307,7 +308,7 @@ def _test_snapshot_store_pure():
     ys_pre = sorted(int(n["y"]) for n in bold_pre["paths"][0]["nodes"])
     assert ys_pre == [1230, 1230, 1420, 1420]
 
-    tools.execute_tool(
+    execute_tool(
         "move_nodes",
         {
             "glyph": "Dje-cy",
@@ -323,19 +324,68 @@ def _test_snapshot_store_pure():
     ys_mid = sorted(int(n.position.y) for n in layer.paths[0].nodes)
     assert ys_mid == [1158, 1158, 1420, 1420], ys_mid
 
-    out = tools.execute_tool("reset_snapshot", {}, ctx)
+    out = execute_tool("reset_snapshot", {}, ctx)
     assert "Snapshot restored" in out, out
     ys_post = sorted(int(n.position.y) for n in layer.paths[0].nodes)
     assert ys_post == [1230, 1230, 1420, 1420], ys_post
     assert store.has_snapshot(), "snapshot should persist after reset"
 
-    out = tools.execute_tool("save_snapshot", {"glyph_names": ["Dje-cy"]}, ctx)
+    out = execute_tool("save_snapshot", {"glyph_names": ["Dje-cy"]}, ctx)
     assert "Overwrote previous snapshot" in out, out
 
     store.clear()
     assert not store.has_snapshot()
-    out = tools.execute_tool("reset_snapshot", {}, ctx)
+    out = execute_tool("reset_snapshot", {}, ctx)
     assert out.startswith("[error]"), out
+
+
+def _assert_render_diff_ok(out, *, master="Bold", snapshot_glyph="Dje-cy"):
+    """Successful render_diff returns [header, png_bytes]."""
+    assert isinstance(out, list) and len(out) == 2, out
+    header, png_bytes = out
+    assert isinstance(header, str), type(header)
+    assert header.startswith("render_diff"), header
+    assert master in header, header
+    assert snapshot_glyph in header, header
+    assert isinstance(png_bytes, bytes), type(png_bytes)
+    assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n", png_bytes[:16]
+
+
+def _test_render_diff_sequential():
+    """save_snapshot must enable render_diff; edits should still produce a PNG overlay."""
+    from tests._render_stubs import stub_render_overlay_deps
+
+    import tools
+
+    font = build_mock_font()
+    store = tools.SnapshotStore()
+    ctx = tools.ToolContext(font_provider=lambda: font, snapshot_store=store)
+
+    out = execute_tool("save_snapshot", {"glyph_names": ["Dje-cy"]}, ctx)
+    assert "Snapshot saved" in out, out
+
+    with stub_render_overlay_deps():
+        out = execute_tool("render_diff", {"text": "Ђ", "master": "Bold"}, ctx)
+        _assert_render_diff_ok(out)
+
+        execute_tool(
+            "move_nodes",
+            {
+                "glyph": "Dje-cy",
+                "master": "Bold",
+                "path": 0,
+                "nodes": [0, 1],
+                "dx": 0,
+                "dy": -72,
+            },
+            ctx,
+        )
+        out = execute_tool(
+            "render_diff",
+            {"text": "Ђ", "master": "Bold", "size": 220},
+            ctx,
+        )
+        _assert_render_diff_ok(out)
 
 
 def _test_provider_image_injection_single():
@@ -548,7 +598,7 @@ tp = transform_point(a, 1, 0, 0, 1, 50, 100)
 print('tp_x:', round(tp['x'], 1))
 print('tp_y:', round(tp['y'], 1))
 """
-    result = tools.execute_tool(
+    result = execute_tool(
         "numeric_judge",
         {"glyphs": ["Dje-cy"], "master": "Bold", "code": code},
         ctx,
@@ -576,7 +626,7 @@ def _test_numeric_judge_basic():
         "bb = bbox(p0)\n"
         "print('x_range:', bb['x1'] - bb['x0'])\n"
     )
-    result = tools.execute_tool(
+    result = execute_tool(
         "numeric_judge",
         {"glyphs": ["Dje-cy"], "master": "Bold", "code": code},
         ctx,
@@ -596,7 +646,7 @@ def _test_numeric_judge_dist_and_area():
         "print('horiz:', int(dist(p0[0], p0[1])))\n"
         "print('area:', int(area(p0)))\n"
     )
-    result = tools.execute_tool(
+    result = execute_tool(
         "numeric_judge",
         {"glyphs": ["Dje-cy"], "master": "Bold", "code": code},
         ctx,
@@ -615,7 +665,7 @@ def _test_numeric_judge_runtime_error():
         "print('before')\n"
         "x = g['Dje-cy'][99][0]['x']\n"
     )
-    result = tools.execute_tool(
+    result = execute_tool(
         "numeric_judge",
         {"glyphs": ["Dje-cy"], "master": "Bold", "code": code},
         ctx,
@@ -631,7 +681,7 @@ def _test_numeric_judge_missing_glyph():
     font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
-    result = tools.execute_tool(
+    result = execute_tool(
         "numeric_judge",
         {"glyphs": ["NoSuchGlyph"], "code": "print('hi')"},
         ctx,
@@ -646,7 +696,7 @@ def _test_numeric_judge_no_output_message():
     font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
-    result = tools.execute_tool(
+    result = execute_tool(
         "numeric_judge",
         {"glyphs": ["Dje-cy"], "code": "x = 1 + 1"},
         ctx,
@@ -672,7 +722,7 @@ def _test_numeric_judge_no_mutations():
     layer_bold = font.glyphs["Dje-cy"].layers["M_BOLD"]
     original_x = float(layer_bold.paths[0].nodes[0].position.x)
 
-    tools.execute_tool(
+    execute_tool(
         "numeric_judge",
         {
             "glyphs": ["Dje-cy"],
@@ -692,13 +742,13 @@ def _test_get_glyph_component_transform():
     font = build_composite_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
-    out = tools.execute_tool("get_glyph", {"name": "Composite-cy", "master": "Regular"}, ctx)
+    out = execute_tool("get_glyph", {"name": "Composite-cy", "master": "Regular"}, ctx)
     assert "components: 1" in out, out
     assert "Dje-cy" in out, out
     assert "offset=" in out or "identity" in out or "mirror" in out or "matrix=" in out, out
     assert "used as component in: (none)" in out, out
 
-    out2 = tools.execute_tool("get_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx)
+    out2 = execute_tool("get_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx)
     assert "used as component in (1): Composite-cy" in out2, out2
 
 
@@ -714,7 +764,7 @@ def _test_numeric_judge_composite_transform():
         "print('x0:', p0[0]['x'])\n"
         "print('y0:', p0[0]['y'])\n"
     )
-    result = tools.execute_tool(
+    result = execute_tool(
         "numeric_judge",
         {"glyphs": ["Composite-cy"], "master": "Regular", "code": code},
         ctx,
@@ -738,7 +788,7 @@ def _test_numeric_judge_composite_mirror():
         "p0 = g['Mirrored-cy'][0]\n"
         "print('x0:', p0[0]['x'])\n"
     )
-    result = tools.execute_tool(
+    result = execute_tool(
         "numeric_judge",
         {"glyphs": ["Mirrored-cy"], "master": "Regular", "code": code},
         ctx,
@@ -752,7 +802,7 @@ def _test_get_glyph_no_component_uses():
     font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
-    out = tools.execute_tool("get_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx)
+    out = execute_tool("get_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx)
     assert "used as component in: (none)" in out, out
 
 
@@ -762,7 +812,7 @@ def _test_render_glyph_missing_glyph():
     font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
-    result = tools.execute_tool(
+    result = execute_tool(
         "render_glyph",
         {"name": "NoSuch"},
         ctx,
@@ -778,6 +828,7 @@ def run_smoke():
     _test_tool_handlers_pure()
     _test_agent_loop_fake()
     _test_snapshot_store_pure()
+    _test_render_diff_sequential()
     _test_provider_image_injection_single()
     _test_provider_image_injection_no_images()
     _test_provider_image_injection_multi_in_one_result()
