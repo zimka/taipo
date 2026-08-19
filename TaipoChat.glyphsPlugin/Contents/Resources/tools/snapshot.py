@@ -3,7 +3,12 @@
 from tools.anchors import anchor_name, iter_layer_anchors
 from tools.font_access import resolve_glyph, resolve_master
 from tools.geometry import point
-from tools.render import render_layer_run, render_overlay_run, tight_canvas_contract
+from tools.render_coretext import (
+    format_render_tier_block,
+    render_coretext_lines_png,
+    render_overlay_tiered,
+    resolve_specimen_lines,
+)
 
 def snapshot_layer_data(layer):
     paths = []
@@ -134,19 +139,25 @@ class SnapshotStore:
         apply_snapshot(font, self._slot)
         return {"glyph_names": list(self._glyph_names)}
 
-    def render_pre(self, font, master, text, contract):
-        """Render ``text`` as if the snapshot were the current font state.
-
-        Strategy: snapshot current geometry for the same glyphs, apply the stored
-        snapshot, render, then restore the current geometry. This is synchronous on
-        the main thread, so no intermediate UI frame is observable.
-        """
+    def render_pre(self, font, master, lines, font_size_px):
+        """Render ``lines`` as if the snapshot were the current font state."""
         if not self.has_snapshot():
             raise ValueError("no active snapshot")
         current = snapshot_glyphs(font, self._glyph_names)
         apply_snapshot(font, self._slot)
         try:
-            return render_layer_run(font, master, text, contract)
+            from tools.render_coretext import cleanup_temp_otf, compile_font_to_temp_otf
+
+            otf_path, err = compile_font_to_temp_otf(font, master)
+            if err:
+                raise RuntimeError(err)
+            try:
+                png_bytes, _, _ = render_coretext_lines_png(
+                    otf_path, lines, font_size_px, white_on_black=False
+                )
+            finally:
+                cleanup_temp_otf(otf_path)
+            return png_bytes
         finally:
             apply_snapshot(font, current)
 
@@ -183,29 +194,39 @@ def handle_reset_snapshot(args, ctx, font):
     )
 
 def handle_render_diff(args, ctx, font):
-    text = str(args.get("text") or "")
-    if not text:
-        return "[error] 'text' is required."
+    lines, err = resolve_specimen_lines(args)
+    if err:
+        return err
     master = resolve_master(font, args.get("master"))
     if master is None:
         return "[error] Master not found: %s" % args.get("master")
     if not ctx.snapshot_store.has_snapshot():
         return "[error] No active snapshot — call save_snapshot([...]) before render_diff."
 
-    contract = dict(ctx.render_contract)
-    size = args.get("size")
-    if size is not None:
-        try:
-            contract["em_px"] = float(size)
-        except (TypeError, ValueError):
-            return "[error] 'size' must be a number."
+    try:
+        size = int(args.get("size") or 0)
+    except (TypeError, ValueError):
+        size = 0
+    em_px = float(size) if size > 0 else float(ctx.render_contract.get("em_px", 160.0))
 
     store = ctx.snapshot_store
-    contract = tight_canvas_contract(font, master, text, contract)
-    overlay_png = render_overlay_run(font, master, text, contract, store)
-    header = "render_diff master=%s text=%r snapshot_glyphs=%s" % (
+    try:
+        result = render_overlay_tiered(font, master, lines, em_px, store)
+    except RuntimeError as exc:
+        return "[error] %s" % exc
+
+    specimen_label = lines[0] if len(lines) == 1 else "%d lines" % len(lines)
+    header = "render_diff master=%s lines=%r snapshot_glyphs=%s" % (
         master.name,
-        text,
+        specimen_label,
         list(store._glyph_names),
     )
-    return [header, overlay_png]
+    header += "\n" + format_render_tier_block(
+        result.tier,
+        tier1_error=result.tier1_error,
+        tier2_error=result.tier2_error,
+        coretext_error=result.coretext_error,
+    )
+    if ctx.debug_info_enabled():
+        header += result.timing.debug_suffix()
+    return [header, result.png_bytes]

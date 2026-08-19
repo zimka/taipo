@@ -4,30 +4,46 @@ import math
 
 from tools.font_access import lookup_char, resolve_glyph, resolve_master
 from tools.formatting import fmt_num
+from tools.render_coretext import (
+    format_render_tier_block,
+    render_overlay_tiered,
+    render_specimen_tiered,
+    resolve_specimen_lines,
+)
 
 # encoding: utf-8
 def handle_render_specimen(args, ctx, font):
-    text = str(args.get("text") or "")
-    if not text:
-        return "[error] 'text' is required."
+    lines, err = resolve_specimen_lines(args)
+    if err:
+        return err
     master = resolve_master(font, args.get("master"))
     if master is None:
         return "[error] Master not found: %s" % args.get("master")
-    contract = dict(ctx.render_contract)
     try:
         size = int(args.get("size") or 0)
     except (TypeError, ValueError):
         size = 0
-    if size > 0:
-        contract["em_px"] = float(size)
-        contract["canvas_h"] = int(max(contract["canvas_h"], size * 1.6))
-    png_bytes = render_layer_run(font, master, text, contract)
+    em_px = float(size) if size > 0 else float(ctx.render_contract.get("em_px", 160.0))
+
+    try:
+        result = render_specimen_tiered(font, master, lines, em_px)
+    except RuntimeError as exc:
+        return "[error] %s" % exc
+
+    specimen_label = lines[0] if len(lines) == 1 else "%d lines" % len(lines)
     header = (
-        "render_specimen master=%s size=%s text=%r canvas=%dx%d"
-        % (master.name, int(contract.get("em_px", 0)), text,
-           contract.get("canvas_w"), contract.get("canvas_h"))
+        "render_specimen master=%s size=%s lines=%r canvas=%dx%d"
+        % (master.name, int(em_px), specimen_label, result.canvas_w, result.canvas_h)
     )
-    return [header, png_bytes]
+    header += "\n" + format_render_tier_block(
+        result.tier,
+        tier1_error=result.tier1_error,
+        tier2_error=result.tier2_error,
+        coretext_error=result.coretext_error,
+    )
+    if ctx.debug_info_enabled():
+        header += result.timing.debug_suffix()
+    return [header, result.png_bytes]
 
 def handle_render_glyph(args, ctx, font):
     name = str(args.get("name") or "").strip()
@@ -139,6 +155,147 @@ def draw_glyphs_run(font, master, text, contract):
         if x > right_limit:
             break
 
+def _geometry_base_contract(em_px):
+    return {
+        "em_px": float(em_px),
+        "baseline_y": 56.0,
+        "unknown_advance_upm": 250.0,
+    }
+
+def multiline_canvas_contract(font, master, lines, contract):
+    """Canvas size for multiline geometry rendering."""
+    em_px = float(contract.get("em_px", 160.0))
+    line_height = em_px * _GEOMETRY_LINE_HEIGHT_FACTOR
+    baseline_y = float(contract.get("baseline_y", 56.0))
+    line_widths = [
+        compute_text_advance_px(font, master, line or " ", contract) for line in lines
+    ]
+    max_w = max(line_widths) if line_widths else em_px
+    pad_px = max(8.0, max_w * _RENDER_PAD_FRAC)
+    canvas_w = max(120, int(max_w + 2.0 * pad_px))
+    n_lines = max(1, len(lines))
+    canvas_h = max(
+        80,
+        int(pad_px + baseline_y + (n_lines - 1) * line_height + em_px * 1.1 + pad_px),
+    )
+    c = dict(contract)
+    c["canvas_w"] = canvas_w
+    c["canvas_h"] = canvas_h
+    c["margin_x"] = int(pad_px)
+    c["line_height"] = line_height
+    return c
+
+def draw_glyphs_multiline(font, master, lines, contract):
+    """Draw each specimen row on its own baseline (geometry tier)."""
+    line_height = float(contract.get("line_height", contract.get("em_px", 160.0)))
+    baseline_y = float(contract.get("baseline_y", 56.0))
+    for i, line in enumerate(lines):
+        line_contract = dict(contract)
+        line_contract["baseline_y"] = baseline_y + i * line_height
+        draw_glyphs_run(font, master, line or " ", line_contract)
+
+def render_specimen_geometry(font, master, lines, font_size_px) -> tuple[bytes, int, int]:
+    """Tier 3: draw live master layers without OTF export."""
+    from AppKit import NSBezierPath, NSColor, NSGraphicsContext
+
+    contract = _geometry_base_contract(font_size_px)
+    layout = multiline_canvas_contract(font, master, lines, contract)
+    canvas_w = layout["canvas_w"]
+    canvas_h = layout["canvas_h"]
+
+    rep = make_bitmap_rep(canvas_w, canvas_h)
+    gc = NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.setCurrentContext_(gc)
+    try:
+        NSColor.whiteColor().set()
+        NSBezierPath.bezierPathWithRect_(((0, 0), (canvas_w, canvas_h))).fill()
+
+        guide_ys = list(range(0, canvas_h + 1, _RENDER_GUIDE_STEP))
+        n_guides = len(guide_ys)
+        for i, gy in enumerate(guide_ys):
+            r, g, b = guide_color_ycbcr(i, n_guides)
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, 0.55).set()
+            guide = NSBezierPath.bezierPath()
+            guide.moveToPoint_((0, gy))
+            guide.lineToPoint_((canvas_w, gy))
+            guide.setLineWidth_(1.5)
+            guide.stroke()
+
+        NSColor.blackColor().set()
+        draw_glyphs_multiline(font, master, lines, layout)
+    finally:
+        NSGraphicsContext.restoreGraphicsState()
+
+    return encode_png(rep), canvas_w, canvas_h
+
+def render_white_on_black_multiline_rep(font, master, lines, contract):
+    """White-on-black multiline mask for geometry overlay."""
+    from AppKit import (
+        NSBezierPath,
+        NSColor,
+        NSCompositingOperationSourceOver,
+        NSGraphicsContext,
+    )
+
+    layout = multiline_canvas_contract(font, master, lines, contract)
+    canvas_w = layout["canvas_w"]
+    canvas_h = layout["canvas_h"]
+    rep = make_bitmap_rep(canvas_w, canvas_h)
+    gc = NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.setCurrentContext_(gc)
+    try:
+        NSColor.blackColor().set()
+        NSBezierPath.bezierPathWithRect_(((0, 0), (canvas_w, canvas_h))).fill()
+        NSGraphicsContext.currentContext().setCompositingOperation_(
+            NSCompositingOperationSourceOver
+        )
+        NSColor.whiteColor().set()
+        draw_glyphs_multiline(font, master, lines, layout)
+    finally:
+        NSGraphicsContext.restoreGraphicsState()
+    return rep
+
+def render_overlay_geometry(font, master, lines, font_size_px, store) -> bytes:
+    """Tier 3 R/G overlay from live layer geometry (no export)."""
+    from tools.snapshot import apply_snapshot, snapshot_glyphs
+
+    contract = _geometry_base_contract(font_size_px)
+    layout = multiline_canvas_contract(font, master, lines, contract)
+    canvas_w = layout["canvas_w"]
+    canvas_h = layout["canvas_h"]
+
+    current_snap = snapshot_glyphs(font, store._glyph_names)
+    apply_snapshot(font, store._slot)
+    try:
+        pre_rep = render_white_on_black_multiline_rep(font, master, lines, contract)
+    finally:
+        apply_snapshot(font, current_snap)
+
+    post_rep = render_white_on_black_multiline_rep(font, master, lines, contract)
+
+    bpr = int(pre_rep.bytesPerRow())
+    h = int(pre_rep.pixelsHigh())
+    w = int(pre_rep.pixelsWide())
+    if (
+        bpr != int(post_rep.bytesPerRow())
+        or h != int(post_rep.pixelsHigh())
+        or w != int(post_rep.pixelsWide())
+        or w != canvas_w
+        or h != canvas_h
+    ):
+        raise RuntimeError("geometry overlay silhouette bitmaps differ in layout")
+
+    pre_buf = bitmap_rep_row_bytes(pre_rep)
+    post_buf = bitmap_rep_row_bytes(post_rep)
+    out_buf = bytearray(bpr * h)
+    merge_silhouettes_to_overlay_rg(pre_buf, post_buf, out_buf, bpr, h, w)
+
+    out_rep = make_bitmap_rep(canvas_w, canvas_h)
+    bitmap_rep_write_row_bytes(out_rep, out_buf)
+    return encode_png(out_rep)
+
 def compute_text_advance_px(font, master, text, contract):
     """Sum of glyph advance widths in canvas pixels (no AppKit needed).
 
@@ -209,6 +366,8 @@ def guide_color_ycbcr(idx, n, y=0.55, radius=0.25):
 _RENDER_GUIDE_STEP = 32   # pixels between horizontal guide lines
 
 _RENDER_PAD_FRAC = 0.06   # side padding as a fraction of text advance width
+
+_GEOMETRY_LINE_HEIGHT_FACTOR = 1.25
 
 _GLYPH_RENDER_EM_PX = 400.0
 
@@ -579,41 +738,7 @@ def bitmap_rep_write_row_bytes(rep, buf):
         raw = (c_char * n).from_buffer(buf)
         memmove(int(ptr), addressof(raw), n)
 
-def render_overlay_run(font, master, text, contract, store):
-    """Render the R/G overlay: red = pre (snapshot), green = post (live), yellow = overlap.
-
-    Implementation: draw snapshot and live glyphs as white-on-black masks, then merge
-    pixels so channels are independent (no additive compositing in the graphics state).
-    Returns PNG bytes."""
-    from tools.snapshot import apply_snapshot, snapshot_glyphs
-
-    canvas_w = int(contract.get("canvas_w", 900))
-    canvas_h = int(contract.get("canvas_h", 260))
-
-    current_snap = snapshot_glyphs(font, store._glyph_names)
-    apply_snapshot(font, store._slot)
-    try:
-        pre_rep = render_white_on_black_rep(font, master, text, contract)
-    finally:
-        apply_snapshot(font, current_snap)
-
-    post_rep = render_white_on_black_rep(font, master, text, contract)
-
-    bpr = int(pre_rep.bytesPerRow())
-    h = int(pre_rep.pixelsHigh())
-    w = int(pre_rep.pixelsWide())
-    if (
-        bpr != int(post_rep.bytesPerRow())
-        or h != int(post_rep.pixelsHigh())
-        or w != int(post_rep.pixelsWide())
-    ):
-        raise RuntimeError("overlay silhouette bitmaps differ in layout")
-
-    pre_buf = bitmap_rep_row_bytes(pre_rep)
-    post_buf = bitmap_rep_row_bytes(post_rep)
-    out_buf = bytearray(bpr * h)
-    merge_silhouettes_to_overlay_rg(pre_buf, post_buf, out_buf, bpr, h, w)
-
-    out_rep = make_bitmap_rep(canvas_w, canvas_h)
-    bitmap_rep_write_row_bytes(out_rep, out_buf)
-    return encode_png(out_rep)
+def render_overlay_run(font, master, lines, font_size_px, store):
+    """Render the R/G overlay: red = pre (snapshot), green = post (live), yellow = overlap."""
+    result = render_overlay_tiered(font, master, lines, font_size_px, store)
+    return result.png_bytes

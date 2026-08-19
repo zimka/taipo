@@ -4,51 +4,23 @@
 from contextlib import contextmanager
 
 
-class _FakeBitmapRep:
-    def __init__(self, w=8, h=4):
-        self._w = w
-        self._h = h
-
-    def bytesPerRow(self):
-        return self._w * 4
-
-    def pixelsHigh(self):
-        return self._h
-
-    def pixelsWide(self):
-        return self._w
-
-
 @contextmanager
 def stub_render_overlay_deps():
-    import tools.render as render_mod
+    import tools.snapshot as snapshot_mod
+    from tools.render_coretext import RenderOverlayResult, RenderTier, RenderTiming
 
-    def _fake_white_on_black(*_args, **_kwargs):
-        return _FakeBitmapRep()
+    def _fake_overlay(_font, _master, _lines, _size, _store):
+        return RenderOverlayResult(
+            png_bytes=b"\x89PNG\r\n\x1a\n" + b"\x00" * 8,
+            tier=RenderTier.CORETEXT_FULL,
+            timing=RenderTiming(
+                compile_ms=12.5, render_ms=3.0, total_ms=20.0, compile_count=2
+            ),
+        )
 
-    def _fake_row_bytes(rep):
-        return bytearray(rep.bytesPerRow() * rep.pixelsHigh())
-
-    def _fake_make_rep(w, h):
-        return _FakeBitmapRep(w, h)
-
-    def _fake_encode(_rep):
-        return b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
-
-    saved = {
-        "render_white_on_black_rep": render_mod.render_white_on_black_rep,
-        "bitmap_rep_row_bytes": render_mod.bitmap_rep_row_bytes,
-        "make_bitmap_rep": render_mod.make_bitmap_rep,
-        "bitmap_rep_write_row_bytes": render_mod.bitmap_rep_write_row_bytes,
-        "encode_png": render_mod.encode_png,
-    }
-    render_mod.render_white_on_black_rep = _fake_white_on_black
-    render_mod.bitmap_rep_row_bytes = _fake_row_bytes
-    render_mod.make_bitmap_rep = _fake_make_rep
-    render_mod.bitmap_rep_write_row_bytes = lambda _rep, _buf: None
-    render_mod.encode_png = _fake_encode
+    saved = snapshot_mod.render_overlay_tiered
+    snapshot_mod.render_overlay_tiered = _fake_overlay
     try:
         yield
     finally:
-        for name, fn in saved.items():
-            setattr(render_mod, name, fn)
+        snapshot_mod.render_overlay_tiered = saved

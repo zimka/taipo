@@ -806,6 +806,60 @@ def _test_get_glyph_no_component_uses():
     assert "used as component in: (none)" in out, out
 
 
+def _test_resolve_specimen_lines():
+    from tools.render_coretext import resolve_specimen_lines
+
+    lines, err = resolve_specimen_lines({"text": "Ta"})
+    assert err is None and lines == ["Ta"]
+
+    lines, err = resolve_specimen_lines({"text": "Ta\nVa"})
+    assert err is None and lines == ["Ta", "Va"]
+
+    lines, err = resolve_specimen_lines({"lines": ["Ta", "Va"]})
+    assert err is None and lines == ["Ta", "Va"]
+
+    lines, err = resolve_specimen_lines({"text": ""})
+    assert lines is None and err and "required" in err
+
+    lines, err = resolve_specimen_lines({"lines": []})
+    assert lines is None and err
+
+
+def _test_temporary_export_fixups():
+    from tests.mock import _MockFont, _MockGlyph, _MockGlyphsList, _MockLayer
+    from tools.render_coretext import _temporary_export_fixups
+
+    font = _MockFont()
+    notdef = _MockGlyph(".notdef", "0000", {"M_REG": _MockLayer(width=600, paths=[])})
+    font.glyphs = _MockGlyphsList([notdef])
+
+    with _temporary_export_fixups(font):
+        assert notdef.unicode == ""
+    assert notdef.unicode == "0000"
+
+
+def _test_format_render_tier_block():
+    from tools.render_coretext import RenderTier, format_render_tier_block
+
+    block = format_render_tier_block(
+        RenderTier.CORETEXT_NO_FEATURES,
+        tier1_error="Font export failed: broken feature",
+    )
+    assert "render_tier=coretext_no_features" in block
+    assert "render_tier_reliable_for:" in block
+    assert "render_tier_not_reliable_for:" in block
+    assert "full export failed" in block
+
+    geo = format_render_tier_block(
+        RenderTier.GEOMETRY,
+        tier1_error="err1",
+        tier2_error="err2",
+        coretext_error="CTFontCreateWithURL failed",
+    )
+    assert "render_tier=geometry" in geo
+    assert "CoreText load failed" in geo
+
+
 def _test_render_glyph_missing_glyph():
     import tools
 
@@ -845,6 +899,9 @@ def run_smoke():
     _test_get_glyph_no_component_uses()
     _test_numeric_judge_composite_transform()
     _test_numeric_judge_composite_mirror()
+    _test_resolve_specimen_lines()
+    _test_temporary_export_fixups()
+    _test_format_render_tier_block()
     print("Taipo Chat Resources/tests/smoke.py: run_smoke() OK")
 
 

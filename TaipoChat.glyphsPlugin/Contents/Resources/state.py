@@ -4,6 +4,7 @@
 import json
 
 from http_client import HTTPError
+from session_log import get_logger
 
 from utils import (
     DEFAULT_BASE_URL,
@@ -36,6 +37,8 @@ _USAGE_SUM_KEYS = (
     "cache_read_input_tokens",
     "cache_creation_input_tokens",
 )
+
+_logger = get_logger("agent")
 
 
 def migration_default_strings():
@@ -153,14 +156,18 @@ class ChatState:
                     err_body = e.read().decode("utf-8", errors="replace")
                 except Exception:
                     err_body = str(e)
+                _logger.error("[HTTP %s] %s", e.code, err_body[:4000])
+                _logger.debug("HTTP error full body: %s", err_body)
                 on_event({"kind": "error", "text": "[HTTP %s] %s" % (e.code, err_body[:4000])})
                 return
             except Exception as e:
+                _logger.exception("Agent turn HTTP request failed")
                 on_event({"kind": "error", "text": str(e)})
                 return
 
             parsed = provider.parse_response(payload)
             if parsed["error"]:
+                _logger.error("Provider response error: %s", parsed["error"])
                 on_event({"kind": "error", "text": parsed["error"]})
                 return
 
@@ -210,7 +217,10 @@ class ChatState:
                     raw_result = tool_executor(tu["name"], tu["input"] or {})
                     is_error = False
                 except Exception as e:
-                    raw_result = "[tool error] %s" % e
+                    _logger.exception(
+                        "Tool %s failed (id=%s)", tu["name"], tu.get("id", "?")
+                    )
+                    raw_result = "[tool error] %s: %s" % (type(e).__name__, e)
                     is_error = True
                 content_blocks = normalize_tool_result_content(raw_result)
                 block = {

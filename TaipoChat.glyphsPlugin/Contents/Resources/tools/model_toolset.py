@@ -11,20 +11,36 @@ from __future__ import annotations
 import inspect
 import re
 import typing
-from typing import Any, get_args, get_origin
+from typing import Annotated, Any, get_args, get_origin
 
 from tools.context import ToolContext
 from tools.edit import handle_move_nodes, handle_set_width
+from tools.kerning import (
+    handle_edit_kerning_pairs,
+    handle_find_kerning_rules,
+    handle_read_kerning_pairs,
+)
+from session_log import brief_tool_args, get_logger
+from tools.glyph_metadata import (
+    MetadataPatch,
+    handle_get_glyph_metadata,
+    handle_edit_glyph_metadata,
+    metadata_schema_doc,
+)
 from tools.judge import handle_numeric_judge
 from tools.read import handle_get_glyph, handle_list_glyphs, handle_list_masters
 from tools.render import handle_render_glyph, handle_render_specimen
 from tools.snapshot import handle_render_diff, handle_reset_snapshot, handle_save_snapshot
+
+_tools_logger = get_logger("tools")
+
 
 class ModelToolSpec:
     """Introspection for @model_tool methods: docstring + signature → tool schema."""
 
     _MARKER = "_is_model_tool"
     _NAME_ATTR = "_model_tool_name"
+    _METADATA_RETURN_ATTR = "_model_tool_metadata_return"
     _SECTION_HEADERS = frozenset(
         {"Args", "Arguments", "Returns", "Raises", "Note", "Notes", "Examples", "Yields", "Attributes"}
     )
@@ -81,7 +97,7 @@ class ModelToolSpec:
     ) -> dict[str, Any]:
         """Build a JSON Schema object from a function's typed signature."""
         param_descriptions = param_descriptions or {}
-        hints = typing.get_type_hints(func)
+        hints = typing.get_type_hints(func, include_extras=True)
         sig = inspect.signature(func)
         properties: dict[str, Any] = {}
         required: list[str] = []
@@ -114,6 +130,12 @@ class ModelToolSpec:
         if not cls.is_marked(method):
             raise TypeError("%r is not a model tool" % (method,))
         summary, args_dict = cls.parse_docstring(method.__doc__)
+        if getattr(method, cls._METADATA_RETURN_ATTR, False):
+            summary = (
+                summary
+                + "\n\nReturn value JSON schema:\n"
+                + metadata_schema_doc(mode="full")
+            )
         return {
             "name": cls.tool_name(method),
             "description": summary,
@@ -189,6 +211,16 @@ class ModelToolSpec:
         if annotation is inspect.Parameter.empty:
             raise TypeError("model tool parameters must have type annotations")
 
+        origin = get_origin(annotation)
+        if origin is Annotated:
+            args = get_args(annotation)
+            if args:
+                for meta in args[1:]:
+                    meta_schema = ModelToolSpec._metadata_schema_from_marker(meta)
+                    if meta_schema is not None:
+                        return meta_schema
+                return ModelToolSpec._json_type_for_annotation(args[0])
+
         annotation, _optional = ModelToolSpec._unwrap_optional(annotation)
         origin = get_origin(annotation)
 
@@ -208,15 +240,30 @@ class ModelToolSpec:
         if annotation is dict:
             return {"type": "object"}
 
+        origin_dict = get_origin(annotation)
+        if origin_dict is dict:
+            return {"type": "object"}
+
         raise TypeError("unsupported type annotation for model tool schema: %r" % (annotation,))
 
+    @staticmethod
+    def _metadata_schema_from_marker(meta: Any) -> dict[str, Any] | None:
+        try:
+            from tools.glyph_metadata import MetadataSchema, metadata_json_schema
+        except ImportError:
+            return None
+        if isinstance(meta, MetadataSchema):
+            return metadata_json_schema(mode=meta.mode)
+        return None
 
-def model_tool(func=None, *, name=None):
+
+def model_tool(func=None, *, name=None, metadata_return=False):
     """Mark a method as exposed to the LLM as a tool."""
 
     def decorate(fn):
         setattr(fn, ModelToolSpec._MARKER, True)
         setattr(fn, ModelToolSpec._NAME_ATTR, name)
+        setattr(fn, ModelToolSpec._METADATA_RETURN_ATTR, metadata_return)
         return fn
 
     if func is not None:
@@ -245,14 +292,27 @@ class ModelToolset:
 
     def execute(self, name: str, args: dict | None = None):
         """Dispatch a tool call. Returns content accepted by ``normalize_tool_result_content``."""
+        _tools_logger.info("execute %s args=%s", name, brief_tool_args(args or {}))
         font = self._ctx.font
         if font is None:
-            return "[error] No font is open in Glyphs."
+            result = "[error] No font is open in Glyphs."
+            _tools_logger.warning("Tool %s returned error: %s", name, result)
+            return result
         for attr, member in type(self).__dict__.items():
             if callable(member) and ModelToolSpec.is_marked(member):
                 if ModelToolSpec.tool_name(member) == name:
-                    return getattr(self, attr)(**(args or {}))
-        return "[error] Unknown tool: %s" % name
+                    result = getattr(self, attr)(**(args or {}))
+                    if isinstance(result, str) and (
+                        result.startswith("[error]")
+                        or result.startswith("[tool error]")
+                    ):
+                        _tools_logger.warning(
+                            "Tool %s returned error: %s", name, result[:500]
+                        )
+                    return result
+        result = "[error] Unknown tool: %s" % name
+        _tools_logger.warning("Tool %s returned error: %s", name, result)
+        return result
 
     @model_tool
     def list_masters(self) -> str:
@@ -297,20 +357,189 @@ class ModelToolset:
         """
         return handle_get_glyph({"name": name, "master": master}, self._ctx, self._ctx.font)
 
-    @model_tool
-    def render_specimen(self, text: str, master: str | None = None, size: int | None = None):
+    @model_tool(metadata_return=True)
+    def get_glyph_metadata(self, glyph: str, master: str | None = None) -> str:
         """
-        Render a short text using the CURRENT state of the open font and return a PNG
-        image. Use the SAME text and master before and after a fix so renders are
-        comparable by eye.
+        Return font-wide glyph metadata as a JSON object.
+
+        Fields include unicode, export, note, classification (category, subCategory,
+        script, case, direction), kerning groups (leftKerningGroup, rightKerningGroup),
+        and metrics keys (leftMetricsKey, rightMetricsKey, widthMetricsKey). When
+        master is provided, also includes spacing (lsb, rsb, width) for that master.
+        Use before edit_glyph_metadata to inspect current values and valid field names.
+        Unicode values use uppercase hex without a U+ prefix; null means unencoded.
+        Classification fields are null when inherited from Glyphs auto-classification.
 
         Args:
-            text: Specimen text (short; 1-20 characters is typical).
+            glyph: Glyph name (e.g. '.notdef', 'Dje-cy') or a single character.
+            master: Optional master name or id. When set, per-master lsb/rsb/width are included.
+        """
+        return handle_get_glyph_metadata(
+            {"glyph": glyph, "master": master}, self._ctx, self._ctx.font
+        )
+
+    @model_tool
+    def edit_glyph_metadata(
+        self,
+        glyph: str,
+        changes: MetadataPatch,
+        master: str | None = None,
+    ) -> str:
+        """
+        Apply a partial metadata update to a glyph. Requires user approval (same as move_nodes).
+
+        Only keys present in changes are applied. Use null on nullable fields to clear them
+        (e.g. clear unicode on .notdef, clear kerning groups, revert classification to
+        auto-inheritance). lsb, rsb, and width require master. reset_snapshot does not restore
+        metadata changes; use Glyphs undo or edit_glyph_metadata again to revert.
+
+        Args:
+            glyph: Glyph name.
+            changes: JSON object with fields to change (see get_glyph_metadata schema).
+            master: Master name or id. Required when changes include lsb, rsb, or width.
+        """
+        return handle_edit_glyph_metadata(
+            {"glyph": glyph, "changes": changes, "master": master},
+            self._ctx,
+            self._ctx.font,
+        )
+
+    @model_tool(metadata_return=True)
+    def read_kerning_pairs(
+        self,
+        master: str,
+        pairs: list[dict[str, str]],
+    ) -> str:
+        """
+        Read kerning slots: stored_value, effective_value, and parent for each pair.
+
+        Operands use bare glyph names or @Group for kerning classes (e.g. @A). Never pass
+        @MMK_L_* / @MMK_R_* — those are rejected.
+
+        stored_value: null means no record at this exact slot; 0 means a stored zero (not
+        missing). Read at write keys (glyph names for glyph×glyph, MMK keys for classes).
+
+        effective_value: for glyph×glyph pairs, layout truth from Glyphs kerningForPair;
+        otherwise stored_value if set, else parent.stored_value.
+
+        parent: always present — nearest coarser stored slot, or root {null,null,0}. Use to
+        spot blocking zeros (stored_value 0 shadowing parent -100).
+
+        WARNING (glyph×glyph only): present when table cascade expected value differs from
+        kerningForPair. Trust effective_value for spacing; investigate WARNING before editing.
+
+        Always call read_kerning_pairs on the same {left, right} before edit_kerning_pairs.
+        Pair-operand left/right differs from glyph leftKerningGroup/rightKerningGroup naming
+        (see find_kerning_rules).
+
+        Args:
+            master: Master name or id.
+            pairs: Non-empty list of {left, right} slot specs.
+        """
+        return handle_read_kerning_pairs(
+            {"master": master, "pairs": pairs},
+            self._ctx,
+            self._ctx.font,
+        )
+
+    @model_tool
+    def edit_kerning_pairs(
+        self,
+        master: str,
+        changes: list[dict[str, Any]],
+    ) -> str:
+        """
+        Write kerning slots via stored_value (null removes the record). Requires approval.
+
+        Operands identical to read_kerning_pairs (@Group or glyph name). Always
+        read_kerning_pairs on the same {left, right} before editing — do not infer slots
+        from find_kerning_rules or get_glyph_metadata alone.
+
+        Impact levels (disclose in approval plan):
+        - glyph × glyph: normal
+        - class × glyph or glyph × class: high — name class and affected glyphs
+        - class × class: highest — name both groups and estimated pair count
+
+        Args:
+            master: Master name or id.
+            changes: List of {left, right, stored_value} objects (stored_value null = remove).
+        """
+        return handle_edit_kerning_pairs(
+            {"master": master, "changes": changes},
+            self._ctx,
+            self._ctx.font,
+        )
+
+    @model_tool(metadata_return=True)
+    def find_kerning_rules(
+        self,
+        master: str,
+        target: str,
+        side: str = "all",
+        neighbor_kind: str = "all",
+    ) -> str:
+        """
+        Discover direct kerning table neighbours for a glyph or @Group (no values).
+
+        Lists stored edges touching target only — no transitivity through class membership.
+        After find, call read_kerning_pairs on specific {left, right} slots for values;
+        call edit_kerning_pairs only after read_kerning_pairs on that slot.
+
+        Naming nuance: left/right neighbour buckets are pair-operand positions, not the same
+        as glyph leftKerningGroup/rightKerningGroup (shape sides). A glyph's rightKerningGroup
+        (@T) applies when it is the left operand. Do not infer edit operands from bucket names.
+
+        Args:
+            master: Master name or id.
+            target: Glyph name or @Group (e.g. @T).
+            side: Filter buckets: left, right, or all (default all).
+            neighbor_kind: Filter lists: glyph, class, or all (default all).
+        """
+        return handle_find_kerning_rules(
+            {
+                "master": master,
+                "target": target,
+                "side": side,
+                "neighbor_kind": neighbor_kind,
+            },
+            self._ctx,
+            self._ctx.font,
+        )
+
+    @model_tool
+    def render_specimen(
+        self,
+        text: str | None = None,
+        lines: list[str] | None = None,
+        master: str | None = None,
+        size: int | None = None,
+    ):
+        """
+        Render a short text using the CURRENT state of the open font and return a PNG
+        image. Picks the best available render tier automatically:
+
+        Tier 1 (coretext_full): full OTF export + CoreText — kerning and all OpenType features.
+        Tier 2 (coretext_no_features): export with OT features stripped — outlines, spacing,
+          pair kerning (usually); no ligatures, ccmp, calt, stylistic sets, etc.
+        Tier 3 (geometry): live master outlines, no export — outlines and sidebearings only;
+          no kerning or OpenType features.
+
+        The tool result header always includes render_tier=..., render_tier_reliable_for,
+        and render_tier_not_reliable_for. Read these before trusting the image for kerning,
+        ligatures, or composed accents.
+
+        Use the SAME text/lines and master before and after a fix so renders are comparable.
+
+        Args:
+            text: Single-line or multiline specimen (use \\n between rows). Prefer lines for multiple rows.
+            lines: Multiline specimen as a list of strings, one row per entry.
             master: Master name or id. Defaults to the first master.
             size: Em size in pixels. Default 160.
         """
         return handle_render_specimen(
-            {"text": text, "master": master, "size": size}, self._ctx, self._ctx.font
+            {"text": text, "lines": lines, "master": master, "size": size},
+            self._ctx,
+            self._ctx.font,
         )
 
     @model_tool
@@ -450,19 +679,30 @@ class ModelToolset:
         return handle_reset_snapshot({}, self._ctx, self._ctx.font)
 
     @model_tool
-    def render_diff(self, text: str, master: str | None = None, size: int | None = None):
+    def render_diff(
+        self,
+        text: str | None = None,
+        lines: list[str] | None = None,
+        master: str | None = None,
+        size: int | None = None,
+    ):
         """
         Render a red/green overlay comparing the snapshot geometry (red) against the
         current live font (green). Yellow pixels are overlap.
         Requires an active snapshot — call save_snapshot first.
-        Call this after move_nodes to show the user the visual before/after difference.
+        Uses the same tiered render pipeline as render_specimen; the result header
+        includes render_tier=..., render_tier_reliable_for, and
+        render_tier_not_reliable_for.
 
         Args:
             text: Specimen text (same as was used for render_specimen).
+            lines: Multiline specimen rows (same as render_specimen).
             master: Master name or id. Defaults to the first master.
             size: Em size in pixels. Default 160.
         """
         return handle_render_diff(
-            {"text": text, "master": master, "size": size}, self._ctx, self._ctx.font
+            {"text": text, "lines": lines, "master": master, "size": size},
+            self._ctx,
+            self._ctx.font,
         )
 

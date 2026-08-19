@@ -19,6 +19,10 @@ class ToolContext:
         self.render_contract = dict(render_contract or DEFAULT_RENDER_CONTRACT)
         self.snapshot_store = snapshot_store if snapshot_store is not None else SnapshotStore()
         self.api_settings = api_settings if api_settings is not None else {}
+        self.debug_info = False
+
+    def debug_info_enabled(self):
+        return bool(self.debug_info)
 
     @property
     def font(self):

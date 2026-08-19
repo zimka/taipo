@@ -24,6 +24,7 @@ from vanilla import Button, CheckBox, EditText, TextBox, TextEditor, Window
 from tools import DEFAULT_RENDER_CONTRACT, SnapshotStore, ToolContext
 from tools.model_toolset import ModelToolset
 from _version import __version__ as PLUGIN_VERSION
+from session_log import begin_session, configure as configure_session_log
 from state import ChatState, migration_default_strings
 from utils import (
     DEFAULT_BASE_URL,
@@ -390,6 +391,55 @@ class TaipoChatPlugin(GeneralPlugin):
         self._build_window()
         self._refresh_setup_ui()
         self._refresh_control_ui()
+        self._configure_session_logging()
+
+    @objc.python_method
+    def _session_log_header(self):
+        import sys
+
+        font = None
+        try:
+            font = Glyphs.font
+        except Exception:
+            pass
+        glyphs_ver = "?"
+        try:
+            vn = getattr(Glyphs, "versionNumber", None)
+            if vn is not None:
+                glyphs_ver = str(vn)
+        except Exception:
+            pass
+        glyph_count = None
+        master_count = None
+        font_name = None
+        if font is not None:
+            font_name = getattr(font, "familyName", None) or getattr(font, "name", None)
+            try:
+                glyph_count = len(list(font.glyphs))
+            except Exception:
+                pass
+            try:
+                master_count = len(list(font.masters))
+            except Exception:
+                pass
+        return {
+            "plugin_version": PLUGIN_VERSION,
+            "python_version": "%d.%d.%d" % sys.version_info[:3],
+            "glyphs_version": glyphs_ver,
+            "font_name": font_name or "(none)",
+            "glyph_count": glyph_count,
+            "master_count": master_count,
+            "model": (self._state.settings.get("model") or "").strip(),
+        }
+
+    @objc.python_method
+    def _configure_session_logging(self):
+        configure_session_log(
+            self._debug_info,
+            ui_sink=self._append_debug if self._debug_info else None,
+        )
+        if self._debug_info:
+            begin_session(self._session_log_header())
 
     @objc.python_method
     def start(self):
@@ -566,6 +616,7 @@ class TaipoChatPlugin(GeneralPlugin):
     def _on_debug_info_toggle_(self, sender):
         self._debug_info = bool(self.w.showToolResults.get())
         _set_default("debugInfo", "1" if self._debug_info else "0")
+        self._configure_session_logging()
 
     @objc.python_method
     def _save_settings_from_ui(self):
@@ -692,6 +743,11 @@ class TaipoChatPlugin(GeneralPlugin):
                 ns_btn.setTitle_(title)
         except Exception:
             pass
+
+    @objc.python_method
+    def _append_debug(self, text):
+        line = text if text.endswith("\n") else text + "\n"
+        self._append_plain_text("[debug]: " + line, color=NSColor.secondaryLabelColor())
 
     @objc.python_method
     def _append_plain_text(self, text, color=None):
@@ -865,7 +921,11 @@ class TaipoChatPlugin(GeneralPlugin):
 
     @objc.python_method
     def _tool_executor(self, name, args):
-        return _run_on_main_sync(lambda: self._toolset.execute(name, args))
+        def run():
+            self._toolset._ctx.debug_info = self._debug_info
+            return self._toolset.execute(name, args)
+
+        return _run_on_main_sync(run)
 
     @objc.python_method
     def _start_turn(self, user_text):
@@ -892,6 +952,9 @@ class TaipoChatPlugin(GeneralPlugin):
                     cancel_event=self._cancel_event,
                 )
             except Exception as e:
+                from session_log import get_logger
+
+                get_logger("agent").exception("Worker turn failed")
                 self._dispatch_event({"kind": "error", "text": str(e)})
             finally:
                 NSOperationQueue.mainQueue().addOperationWithBlock_(
@@ -971,6 +1034,8 @@ class TaipoChatPlugin(GeneralPlugin):
         store = getattr(self._toolset.ctx, "snapshot_store", None)
         if store is not None:
             store.clear()
+        if self._debug_info:
+            begin_session(self._session_log_header())
         self._refresh_setup_ui()
         self._refresh_control_ui()
         self._save_settings_from_ui()

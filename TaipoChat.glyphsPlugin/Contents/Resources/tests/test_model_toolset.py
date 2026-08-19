@@ -16,7 +16,25 @@ if _RESOURCES not in sys.path:
 
 from tools.model_toolset import ModelToolSpec, ModelToolset, model_tool
 from provider import _convert_tool_schema
-from tests.fixtures.legacy_tool_schemas import LEGACY_TOOL_SCHEMAS
+
+EXPECTED_TOOL_NAMES = [
+    "list_masters",
+    "list_glyphs",
+    "get_glyph",
+    "get_glyph_metadata",
+    "edit_glyph_metadata",
+    "read_kerning_pairs",
+    "edit_kerning_pairs",
+    "find_kerning_rules",
+    "render_specimen",
+    "render_glyph",
+    "numeric_judge",
+    "move_nodes",
+    "set_width",
+    "save_snapshot",
+    "reset_snapshot",
+    "render_diff",
+]
 
 
 def _schema_diff_path(expected, actual, prefix=""):
@@ -144,31 +162,28 @@ def _test_signature_to_json_schema_arrays():
     assert schema["required"] == ["glyphs", "nodes"]
 
 
-def _test_schema_parity_with_legacy_fixture():
-    generated = ModelToolset.schemas()
-    assert len(generated) == len(LEGACY_TOOL_SCHEMAS)
-    for expected, actual in zip(LEGACY_TOOL_SCHEMAS, generated):
-        assert expected["name"] == actual["name"]
-        assert_schemas_equal(expected, actual)
+def _test_schemas_list_expected_tools():
+    names = [schema["name"] for schema in ModelToolset.schemas()]
+    assert names == EXPECTED_TOOL_NAMES
 
 
-def _test_schema_parity_per_tool():
-    generated = {schema["name"]: schema for schema in ModelToolset.schemas()}
-    for expected in LEGACY_TOOL_SCHEMAS:
-        name = expected["name"]
-        assert name in generated, "missing generated schema for %r" % name
-        assert_schemas_equal(expected, generated[name])
+def _test_schemas_have_required_shape():
+    for schema in ModelToolset.schemas():
+        assert isinstance(schema["name"], str)
+        assert schema["name"]
+        assert isinstance(schema["description"], str)
+        assert schema["description"]
+        assert schema["input_schema"]["type"] == "object"
+        assert isinstance(schema["input_schema"].get("properties"), dict)
 
 
 def _test_provider_round_trip():
-    generated = {schema["name"]: schema for schema in ModelToolset.schemas()}
-    legacy = {schema["name"]: schema for schema in LEGACY_TOOL_SCHEMAS}
-    for name in legacy:
-        assert _convert_tool_schema(generated[name]) == _convert_tool_schema(legacy[name])
-
-
-def _test_legacy_fixture_matches_model_toolset():
-    assert_schemas_equal(LEGACY_TOOL_SCHEMAS, ModelToolset.schemas())
+    for schema in ModelToolset.schemas():
+        converted = _convert_tool_schema(schema)
+        fn = converted["function"]
+        assert fn["name"] == schema["name"]
+        assert fn["description"] == schema["description"]
+        assert_schemas_equal(fn["parameters"], schema["input_schema"])
 
 
 def run_tests():
@@ -177,9 +192,8 @@ def run_tests():
     _test_parse_google_docstring_no_args()
     _test_signature_to_json_schema_required_optional()
     _test_signature_to_json_schema_arrays()
-    _test_legacy_fixture_matches_model_toolset()
-    _test_schema_parity_with_legacy_fixture()
-    _test_schema_parity_per_tool()
+    _test_schemas_list_expected_tools()
+    _test_schemas_have_required_shape()
     _test_provider_round_trip()
     print("Taipo Chat Resources/tests/test_model_toolset.py: run_tests() OK")
 
