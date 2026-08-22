@@ -29,8 +29,11 @@ from tools.glyph_metadata import (
 )
 from tools.judge import handle_numeric_judge
 from tools.read import handle_get_glyph, handle_list_glyphs, handle_list_masters
-from tools.render import handle_render_glyph, handle_render_specimen
-from tools.snapshot import handle_render_diff, handle_reset_snapshot, handle_save_snapshot
+from tools.render import (
+    handle_render_glyph,
+    handle_render_specimen,
+    handle_render_specimen_diff,
+)
 
 _tools_logger = get_logger("tools")
 
@@ -390,8 +393,7 @@ class ModelToolset:
 
         Only keys present in changes are applied. Use null on nullable fields to clear them
         (e.g. clear unicode on .notdef, clear kerning groups, revert classification to
-        auto-inheritance). lsb, rsb, and width require master. reset_snapshot does not restore
-        metadata changes; use Glyphs undo or edit_glyph_metadata again to revert.
+        auto-inheritance). lsb, rsb, and width require master.
 
         Args:
             glyph: Glyph name.
@@ -524,11 +526,14 @@ class ModelToolset:
         Tier 3 (geometry): live master outlines, no export — outlines and sidebearings only;
           no kerning or OpenType features.
 
-        The tool result header always includes render_tier=..., render_tier_reliable_for,
-        and render_tier_not_reliable_for. Read these before trusting the image for kerning,
-        ligatures, or composed accents.
+        The tool result header starts with render_specimen_id=N, then includes
+        render_tier=..., render_tier_reliable_for, and render_tier_not_reliable_for.
+        Read the tier fields before trusting the image for kerning, ligatures, or
+        composed accents.
 
-        Use the SAME text/lines and master before and after a fix so renders are comparable.
+        Note render_specimen_id from the result. Call this BEFORE mutations if you
+        will later call render_specimen_diff with that id. Keep the same specimen
+        (text/lines, master, size) for the pair you intend to compare.
 
         Args:
             text: Single-line or multiline specimen (use \\n between rows). Prefer lines for multiple rows.
@@ -615,7 +620,6 @@ class ModelToolset:
         Addresses nodes by path index and node index (from get_glyph output).
         Multiple nodes in the same path can be shifted in one call.
         For nodes in different paths or different glyphs, use parallel tool calls.
-        Call save_snapshot FIRST before any move_nodes so the user can undo.
         Use set_width when the advance width also needs to change.
 
         Args:
@@ -645,7 +649,6 @@ class ModelToolset:
         Set the advance width (spacing metric) of a glyph in one master.
         The advance width is separate from the outline — moving nodes does not change it.
         Use this together with move_nodes when widening or narrowing a glyph.
-        Call save_snapshot FIRST so the user can undo.
 
         Args:
             glyph: Glyph name.
@@ -657,51 +660,23 @@ class ModelToolset:
         )
 
     @model_tool
-    def save_snapshot(self, glyph_names: list[str]) -> str:
+    def render_specimen_diff(self, reference_render_specimen_id: int):
         """
-        Capture the current geometry (node positions, anchors, widths across all masters)
-        of the listed glyphs. One slot only — a second call overwrites. You MUST call
-        this BEFORE the first move_nodes in a fix so the user (or you) can revert
-        via reset_snapshot and so render_diff can render the overlay comparison.
+        Render a red/green overlay comparing an earlier render_specimen (red) against
+        the current live font (green). Yellow pixels are overlap.
+        The id must come from an earlier render_specimen in this session. Specimen
+        text, master, and size are taken from that stored render — do not pass them.
+
+        If the current render tier or open font differs from the reference, the overlay
+        is skipped and a text explanation is returned. Call render_specimen for a
+        current image in that case; do not treat a skipped result as a visual diff.
 
         Args:
-            glyph_names: Glyph names you plan to edit. Must be non-empty.
+            reference_render_specimen_id: render_specimen_id from an earlier
+                render_specimen result in this session.
         """
-        return handle_save_snapshot({"glyph_names": glyph_names}, self._ctx, self._ctx.font)
-
-    @model_tool
-    def reset_snapshot(self) -> str:
-        """
-        Restore the geometry saved by save_snapshot. Use when your edits went the wrong
-        way and you want to revise the plan, or to undo an exploratory attempt. The
-        snapshot itself is kept (a reset can be applied multiple times).
-        """
-        return handle_reset_snapshot({}, self._ctx, self._ctx.font)
-
-    @model_tool
-    def render_diff(
-        self,
-        text: str | None = None,
-        lines: list[str] | None = None,
-        master: str | None = None,
-        size: int | None = None,
-    ):
-        """
-        Render a red/green overlay comparing the snapshot geometry (red) against the
-        current live font (green). Yellow pixels are overlap.
-        Requires an active snapshot — call save_snapshot first.
-        Uses the same tiered render pipeline as render_specimen; the result header
-        includes render_tier=..., render_tier_reliable_for, and
-        render_tier_not_reliable_for.
-
-        Args:
-            text: Specimen text (same as was used for render_specimen).
-            lines: Multiline specimen rows (same as render_specimen).
-            master: Master name or id. Defaults to the first master.
-            size: Em size in pixels. Default 160.
-        """
-        return handle_render_diff(
-            {"text": text, "lines": lines, "master": master, "size": size},
+        return handle_render_specimen_diff(
+            {"reference_render_specimen_id": reference_render_specimen_id},
             self._ctx,
             self._ctx.font,
         )

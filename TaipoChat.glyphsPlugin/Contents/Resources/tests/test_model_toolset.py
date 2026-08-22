@@ -31,9 +31,7 @@ EXPECTED_TOOL_NAMES = [
     "numeric_judge",
     "move_nodes",
     "set_width",
-    "save_snapshot",
-    "reset_snapshot",
-    "render_diff",
+    "render_specimen_diff",
 ]
 
 
@@ -173,8 +171,19 @@ def _test_schemas_have_required_shape():
         assert schema["name"]
         assert isinstance(schema["description"], str)
         assert schema["description"]
+        assert "RenderSpec" not in schema["description"]
         assert schema["input_schema"]["type"] == "object"
         assert isinstance(schema["input_schema"].get("properties"), dict)
+        blob = str(schema["input_schema"])
+        assert "RenderSpec" not in blob
+
+
+def _test_render_specimen_mentions_diff():
+    by_name = {s["name"]: s for s in ModelToolset.schemas()}
+    desc = by_name["render_specimen"]["description"]
+    assert "render_specimen_id" in desc
+    assert "render_specimen_diff" in desc
+    assert "reference_render_specimen_id" in by_name["render_specimen_diff"]["input_schema"]["properties"]
 
 
 def _test_provider_round_trip():
@@ -194,6 +203,7 @@ def run_tests():
     _test_signature_to_json_schema_arrays()
     _test_schemas_list_expected_tools()
     _test_schemas_have_required_shape()
+    _test_render_specimen_mentions_diff()
     _test_provider_round_trip()
     print("Taipo Chat Resources/tests/test_model_toolset.py: run_tests() OK")
 

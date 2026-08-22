@@ -21,7 +21,7 @@ from GlyphsApp import Glyphs, WINDOW_MENU
 from GlyphsApp.plugins import GeneralPlugin
 from vanilla import Button, CheckBox, EditText, TextBox, TextEditor, Window
 
-from tools import DEFAULT_RENDER_CONTRACT, SnapshotStore, ToolContext
+from tools import DEFAULT_RENDER_CONTRACT, ToolContext
 from tools.model_toolset import ModelToolset
 from _version import __version__ as PLUGIN_VERSION
 from session_log import begin_session, configure as configure_session_log
@@ -179,7 +179,6 @@ class TaipoChatPlugin(GeneralPlugin):
             ToolContext(
                 font_provider=self._font_provider,
                 render_contract=DEFAULT_RENDER_CONTRACT,
-                snapshot_store=SnapshotStore(),
                 api_settings=self._state.settings,
             )
         )
@@ -281,13 +280,8 @@ class TaipoChatPlugin(GeneralPlugin):
             "Mode: Planning",
             sizeStyle="small",
         )
-        self.w.beforeEditLabel = TextBox(
-            (205, 0, 175, _STATUS_ROW_H),
-            "Before: none",
-            sizeStyle="small",
-        )
         self.w.tokenLabel = TextBox(
-            (390, 0, -12, _STATUS_ROW_H),
+            (205, 0, -12, _STATUS_ROW_H),
             self._state.usage_caption(),
             sizeStyle="small",
         )
@@ -307,11 +301,6 @@ class TaipoChatPlugin(GeneralPlugin):
             (108, 0, 100, 22),
             "Approve plan",
             callback=self._on_approve_plan_,
-        )
-        self.w.revertEditsButton = Button(
-            (214, 0, 118, 22),
-            "Revert Edits",
-            callback=self._on_reset_snapshot_,
         )
 
         self.w.versionLabel = TextBox(
@@ -349,10 +338,6 @@ class TaipoChatPlugin(GeneralPlugin):
             "Authorize the pending plan. You can also type Approve alone.",
         )
         _set_tooltip(
-            self.w.revertEditsButton,
-            "Restore listed glyphs to their before-edit state. ⌘Z in Glyphs also works.",
-        )
-        _set_tooltip(
             self.w.showToolResults,
             "When on, shows tool inputs/outputs, turn-finished markers, and full error detail. "
             "Specimen and diff images always appear.",
@@ -383,6 +368,7 @@ class TaipoChatPlugin(GeneralPlugin):
         self._worker_busy = False
         self._plan_pending = False
         self._editing_mode = False
+        self._edits_applied = False
         self._status_override = None
         self._settings_expanded = False
         self._debug_info = _show_tool_results_from_default(
@@ -579,14 +565,12 @@ class TaipoChatPlugin(GeneralPlugin):
         self.w.inputField.setPosSize((12, y, -12, 72))
         y += 80
         self.w.modeLabel.setPosSize((12, y, 185, _STATUS_ROW_H))
-        self.w.beforeEditLabel.setPosSize((205, y, 175, _STATUS_ROW_H))
-        self.w.tokenLabel.setPosSize((390, y, -12, _STATUS_ROW_H))
+        self.w.tokenLabel.setPosSize((205, y, -12, _STATUS_ROW_H))
         y += 18
         self.w.statusDetail.setPosSize((12, y, -12, 28))
         y += 32
         self.w.primaryButton.setPosSize((12, y, 88, 22))
         self.w.approveButton.setPosSize((108, y, 100, 22))
-        self.w.revertEditsButton.setPosSize((214, y, 118, 22))
 
     @objc.python_method
     def _sync_settings_controls_from_state(self):
@@ -678,22 +662,6 @@ class TaipoChatPlugin(GeneralPlugin):
         return True
 
     @objc.python_method
-    def _has_snapshot(self):
-        store = getattr(self._toolset.ctx, "snapshot_store", None)
-        return bool(store and store.has_snapshot())
-
-    @objc.python_method
-    def _before_edit_caption(self):
-        store = getattr(self._toolset.ctx, "snapshot_store", None)
-        if not store or not store.has_snapshot():
-            return "Before: none"
-        names = list(getattr(store, "_glyph_names", []) or [])
-        preview = ", ".join(names[:3])
-        if len(names) > 3:
-            preview += ", +%d" % (len(names) - 3)
-        return "Before: %s" % (preview or "(saved)")
-
-    @objc.python_method
     def _default_status_detail(self):
         if self._status_override:
             return self._status_override
@@ -703,8 +671,8 @@ class TaipoChatPlugin(GeneralPlugin):
             return "Assistant is working…"
         if self._plan_pending:
             return "Plan ready — review above, then Approve plan or reply to revise."
-        if self._has_snapshot():
-            return "Edits done. Check diff above. Undo: Revert Edits or ⌘Z in Glyphs."
+        if self._edits_applied:
+            return "Edits applied. Check the red/green diff above."
         return "Ready. Describe a fix, then Send."
 
     @objc.python_method
@@ -714,7 +682,6 @@ class TaipoChatPlugin(GeneralPlugin):
 
         mode = "Editing" if self._editing_mode and self._worker_busy else "Planning"
         self.w.modeLabel.set("Mode: %s" % mode)
-        self.w.beforeEditLabel.set(self._before_edit_caption())
         self.w.tokenLabel.set(self._state.usage_caption())
         self.w.statusDetail.set(self._default_status_detail())
 
@@ -727,7 +694,6 @@ class TaipoChatPlugin(GeneralPlugin):
             _set_tooltip(self.w.primaryButton, "Send your message to the assistant.")
 
         self.w.approveButton.enable(self._plan_pending and not self._worker_busy)
-        self.w.revertEditsButton.enable(self._has_snapshot() and not self._worker_busy)
 
         try:
             self.w.inputField.enable(not self._worker_busy)
@@ -938,6 +904,7 @@ class TaipoChatPlugin(GeneralPlugin):
             return
         if _is_approve_message(user_text):
             self._editing_mode = True
+            self._edits_applied = True
         self._status_override = None
         self._cancel_event = threading.Event()
         self._set_busy(True)
@@ -993,31 +960,6 @@ class TaipoChatPlugin(GeneralPlugin):
         self.w.primaryButton.enable(False)
 
     @objc.python_method
-    def _on_reset_snapshot_(self, sender):
-        if self._worker_busy:
-            return
-        store = getattr(self._toolset.ctx, "snapshot_store", None)
-        if store is None or not store.has_snapshot():
-            self._refresh_control_ui()
-            return
-        font = self._font_provider()
-        if font is None:
-            _show_alert("Taipo Chat", "No font is open — cannot revert edits.")
-            return
-        try:
-            info = store.reset(font)
-        except Exception as e:
-            _show_alert("Taipo Chat", "Revert failed: %s" % e)
-            return
-        names = ", ".join(info.get("glyph_names", []) or [])
-        self._append_plain_text(
-            "\n[reverted edits] %s\n\n" % names,
-            color=NSColor.systemOrangeColor(),
-        )
-        self._refresh_control_ui()
-        self._scroll_to_end()
-
-    @objc.python_method
     def _on_new_chat_(self, sender):
         """Clear session state. No UI button yet — open a fresh window via Window menu."""
         if self._worker_busy and self._cancel_event is not None:
@@ -1030,10 +972,11 @@ class TaipoChatPlugin(GeneralPlugin):
         self.w.inputField.set("")
         self._plan_pending = False
         self._editing_mode = False
+        self._edits_applied = False
         self._status_override = None
-        store = getattr(self._toolset.ctx, "snapshot_store", None)
-        if store is not None:
-            store.clear()
+        registry = getattr(self._toolset.ctx, "render_registry", None)
+        if registry is not None:
+            registry.clear()
         if self._debug_info:
             begin_session(self._session_log_header())
         self._refresh_setup_ui()

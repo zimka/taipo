@@ -6,34 +6,42 @@ from tools.font_access import lookup_char, resolve_glyph, resolve_master
 from tools.formatting import fmt_num
 from tools.render_coretext import (
     format_render_tier_block,
-    render_overlay_tiered,
     render_specimen_tiered,
-    resolve_specimen_lines,
+    specimen_pad_px,
 )
+from tools.render_spec import RenderSpec, font_identity
 
-# encoding: utf-8
+
 def handle_render_specimen(args, ctx, font):
-    lines, err = resolve_specimen_lines(args)
+    spec, err = RenderSpec.from_agent_args(args, font, ctx)
     if err:
         return err
-    master = resolve_master(font, args.get("master"))
+    master = resolve_master(font, spec.master_id)
     if master is None:
-        return "[error] Master not found: %s" % args.get("master")
-    try:
-        size = int(args.get("size") or 0)
-    except (TypeError, ValueError):
-        size = 0
-    em_px = float(size) if size > 0 else float(ctx.render_contract.get("em_px", 160.0))
+        return "[error] Master not found: %s" % spec.master_id
 
     try:
-        result = render_specimen_tiered(font, master, lines, em_px)
+        result = render_with_spec(font, spec)
     except RuntimeError as exc:
         return "[error] %s" % exc
 
+    used = result.resolved_spec or spec.with_canvas(result.canvas_w, result.canvas_h)
+    rid = ctx.render_registry.put(
+        used, result.png_bytes, result.tier, font_identity(font)
+    )
+    lines = list(used.lines)
     specimen_label = lines[0] if len(lines) == 1 else "%d lines" % len(lines)
     header = (
+        "render_specimen_id=%d\n"
         "render_specimen master=%s size=%s lines=%r canvas=%dx%d"
-        % (master.name, int(em_px), specimen_label, result.canvas_w, result.canvas_h)
+        % (
+            rid,
+            master.name,
+            int(used.em_px),
+            specimen_label,
+            result.canvas_w,
+            result.canvas_h,
+        )
     )
     header += "\n" + format_render_tier_block(
         result.tier,
@@ -44,6 +52,111 @@ def handle_render_specimen(args, ctx, font):
     if ctx.debug_info_enabled():
         header += result.timing.debug_suffix()
     return [header, result.png_bytes]
+
+
+def handle_render_specimen_diff(args, ctx, font):
+    raw_id = args.get("reference_render_specimen_id")
+    try:
+        rid = int(raw_id)
+    except (TypeError, ValueError):
+        return "[error] 'reference_render_specimen_id' must be an integer."
+
+    record = ctx.render_registry.get(rid)
+    if record is None:
+        return ctx.render_registry.unknown_id_error(raw_id)
+
+    spec = record.spec
+    master = resolve_master(font, spec.master_id)
+    if master is None:
+        return "[error] Master not found: %s" % spec.master_id
+
+    try:
+        result = render_with_spec(font, spec)
+    except RuntimeError as exc:
+        return "[error] %s" % exc
+
+    current_font_id = font_identity(font)
+    if result.tier != record.tier or current_font_id != record.font_identity:
+        lines = list(spec.lines)
+        specimen_label = lines[0] if len(lines) == 1 else "%d lines" % len(lines)
+        msg = [
+            "render_specimen_diff overlay skipped — sides are not comparable.",
+            "reference_id=%d" % rid,
+            "reference_tier=%s current_tier=%s" % (record.tier.value, result.tier.value),
+            "reference_font=%s" % record.font_identity,
+            "current_font=%s" % current_font_id,
+        ]
+        if result.tier != record.tier:
+            msg.append(
+                "Render tier changed. An overlay would be misleading (kerning or "
+                "features may appear or vanish because the rasterizer changed)."
+            )
+            msg.append(format_render_tier_block(
+                result.tier,
+                tier1_error=result.tier1_error,
+                tier2_error=result.tier2_error,
+                coretext_error=result.coretext_error,
+            ))
+        if current_font_id != record.font_identity:
+            msg.append("Open font identity changed. This is not a before/after of the same file.")
+        msg.append(
+            "Call render_specimen for a current image. Do not treat this result as a visual diff."
+        )
+        return "\n".join(msg)
+
+    target_w = max(record.spec.canvas_w, result.canvas_w)
+    target_h = max(record.spec.canvas_h, result.canvas_h)
+    try:
+        ref_png = pad_png_to_canvas(
+            record.png_bytes,
+            record.spec.canvas_w,
+            record.spec.canvas_h,
+            target_w,
+            target_h,
+        )
+        cur_png = pad_png_to_canvas(
+            result.png_bytes, result.canvas_w, result.canvas_h, target_w, target_h
+        )
+        overlay_png, changed = overlay_from_specimen_pngs(ref_png, cur_png)
+    except RuntimeError as exc:
+        return "[error] %s" % exc
+
+    lines = list(spec.lines)
+    specimen_label = lines[0] if len(lines) == 1 else "%d lines" % len(lines)
+    header = (
+        "render_specimen_diff reference_id=%d master=%s size=%s lines=%r canvas=%dx%d"
+        % (rid, master.name, int(spec.em_px), specimen_label, target_w, target_h)
+    )
+    header += "\nreference_tier=%s current_tier=%s" % (
+        record.tier.value,
+        result.tier.value,
+    )
+    header += "\nchanged_ink_pixels=%d" % changed
+    header += "\n" + format_render_tier_block(
+        result.tier,
+        tier1_error=result.tier1_error,
+        tier2_error=result.tier2_error,
+        coretext_error=result.coretext_error,
+    )
+    if ctx.debug_info_enabled():
+        header += result.timing.debug_suffix()
+    return [header, overlay_png]
+
+
+def render_with_spec(font, spec):
+    """Rasterize the current font using a frozen camera. May grow canvas, never origin."""
+    master = resolve_master(font, spec.master_id)
+    if master is None:
+        raise RuntimeError("Master not found: %s" % spec.master_id)
+    if spec.origin_locked:
+        needed_w, needed_h = measure_needed_canvas(font, master, spec)
+        draw_spec = spec.with_canvas(needed_w, needed_h)
+    else:
+        needed_w, needed_h = spec.canvas_w, spec.canvas_h
+        draw_spec = spec
+    return render_specimen_tiered(
+        font, master, list(spec.lines), spec.em_px, spec=draw_spec
+    )
 
 def handle_render_glyph(args, ctx, font):
     name = str(args.get("name") or "").strip()
@@ -162,6 +275,42 @@ def _geometry_base_contract(em_px):
         "unknown_advance_upm": 250.0,
     }
 
+def measure_geometry_layout(font, master, lines, em_px):
+    """Pad, origin, and canvas from live advances (no AppKit). Used to build RenderSpec."""
+    contract = _geometry_base_contract(em_px)
+    layout = multiline_canvas_contract(font, master, lines, contract)
+    return {
+        "canvas_w": int(layout["canvas_w"]),
+        "canvas_h": int(layout["canvas_h"]),
+        "pad": float(layout["margin_x"]),
+        "baseline_y0": float(layout["baseline_y"]),
+        "line_height": float(layout["line_height"]),
+    }
+
+
+def measure_needed_canvas(font, master, spec):
+    """Ink extent for *spec.lines* using the frozen pad (do not recompute pad)."""
+    contract = _geometry_base_contract(spec.em_px)
+    line_widths = [
+        compute_text_advance_px(font, master, line or " ", contract) for line in spec.lines
+    ]
+    max_w = max(line_widths) if line_widths else spec.em_px
+    needed_w = max(120, int(max_w + 2.0 * spec.pad))
+    if spec.origin_locked:
+        return needed_w, spec.canvas_h
+    n_lines = max(1, len(spec.lines))
+    needed_h = max(
+        80,
+        int(
+            spec.baseline_y0
+            + (n_lines - 1) * spec.line_height
+            + spec.em_px * 1.1
+            + spec.pad
+        ),
+    )
+    return needed_w, needed_h
+
+
 def multiline_canvas_contract(font, master, lines, contract):
     """Canvas size for multiline geometry rendering."""
     em_px = float(contract.get("em_px", 160.0))
@@ -171,7 +320,7 @@ def multiline_canvas_contract(font, master, lines, contract):
         compute_text_advance_px(font, master, line or " ", contract) for line in lines
     ]
     max_w = max(line_widths) if line_widths else em_px
-    pad_px = max(8.0, max_w * _RENDER_PAD_FRAC)
+    pad_px = specimen_pad_px(em_px)
     canvas_w = max(120, int(max_w + 2.0 * pad_px))
     n_lines = max(1, len(lines))
     canvas_h = max(
@@ -183,6 +332,7 @@ def multiline_canvas_contract(font, master, lines, contract):
     c["canvas_h"] = canvas_h
     c["margin_x"] = int(pad_px)
     c["line_height"] = line_height
+    c["baseline_y"] = baseline_y
     return c
 
 def draw_glyphs_multiline(font, master, lines, contract):
@@ -194,12 +344,23 @@ def draw_glyphs_multiline(font, master, lines, contract):
         line_contract["baseline_y"] = baseline_y + i * line_height
         draw_glyphs_run(font, master, line or " ", line_contract)
 
-def render_specimen_geometry(font, master, lines, font_size_px) -> tuple[bytes, int, int]:
+def render_specimen_geometry(font, master, lines, font_size_px, spec=None) -> tuple[bytes, int, int]:
     """Tier 3: draw live master layers without OTF export."""
     from AppKit import NSBezierPath, NSColor, NSGraphicsContext
 
     contract = _geometry_base_contract(font_size_px)
-    layout = multiline_canvas_contract(font, master, lines, contract)
+    if spec is not None and spec.origin_locked:
+        layout = dict(contract)
+        layout["canvas_w"] = spec.canvas_w
+        layout["canvas_h"] = spec.canvas_h
+        layout["margin_x"] = int(spec.pad)
+        layout["baseline_y"] = spec.baseline_y0
+        layout["line_height"] = spec.line_height
+        needed_w, needed_h = measure_needed_canvas(font, master, spec)
+        layout["canvas_w"] = max(spec.canvas_w, needed_w)
+        layout["canvas_h"] = max(spec.canvas_h, needed_h)
+    else:
+        layout = multiline_canvas_contract(font, master, lines, contract)
     canvas_w = layout["canvas_w"]
     canvas_h = layout["canvas_h"]
 
@@ -228,73 +389,6 @@ def render_specimen_geometry(font, master, lines, font_size_px) -> tuple[bytes, 
         NSGraphicsContext.restoreGraphicsState()
 
     return encode_png(rep), canvas_w, canvas_h
-
-def render_white_on_black_multiline_rep(font, master, lines, contract):
-    """White-on-black multiline mask for geometry overlay."""
-    from AppKit import (
-        NSBezierPath,
-        NSColor,
-        NSCompositingOperationSourceOver,
-        NSGraphicsContext,
-    )
-
-    layout = multiline_canvas_contract(font, master, lines, contract)
-    canvas_w = layout["canvas_w"]
-    canvas_h = layout["canvas_h"]
-    rep = make_bitmap_rep(canvas_w, canvas_h)
-    gc = NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep)
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.setCurrentContext_(gc)
-    try:
-        NSColor.blackColor().set()
-        NSBezierPath.bezierPathWithRect_(((0, 0), (canvas_w, canvas_h))).fill()
-        NSGraphicsContext.currentContext().setCompositingOperation_(
-            NSCompositingOperationSourceOver
-        )
-        NSColor.whiteColor().set()
-        draw_glyphs_multiline(font, master, lines, layout)
-    finally:
-        NSGraphicsContext.restoreGraphicsState()
-    return rep
-
-def render_overlay_geometry(font, master, lines, font_size_px, store) -> bytes:
-    """Tier 3 R/G overlay from live layer geometry (no export)."""
-    from tools.snapshot import apply_snapshot, snapshot_glyphs
-
-    contract = _geometry_base_contract(font_size_px)
-    layout = multiline_canvas_contract(font, master, lines, contract)
-    canvas_w = layout["canvas_w"]
-    canvas_h = layout["canvas_h"]
-
-    current_snap = snapshot_glyphs(font, store._glyph_names)
-    apply_snapshot(font, store._slot)
-    try:
-        pre_rep = render_white_on_black_multiline_rep(font, master, lines, contract)
-    finally:
-        apply_snapshot(font, current_snap)
-
-    post_rep = render_white_on_black_multiline_rep(font, master, lines, contract)
-
-    bpr = int(pre_rep.bytesPerRow())
-    h = int(pre_rep.pixelsHigh())
-    w = int(pre_rep.pixelsWide())
-    if (
-        bpr != int(post_rep.bytesPerRow())
-        or h != int(post_rep.pixelsHigh())
-        or w != int(post_rep.pixelsWide())
-        or w != canvas_w
-        or h != canvas_h
-    ):
-        raise RuntimeError("geometry overlay silhouette bitmaps differ in layout")
-
-    pre_buf = bitmap_rep_row_bytes(pre_rep)
-    post_buf = bitmap_rep_row_bytes(post_rep)
-    out_buf = bytearray(bpr * h)
-    merge_silhouettes_to_overlay_rg(pre_buf, post_buf, out_buf, bpr, h, w)
-
-    out_rep = make_bitmap_rep(canvas_w, canvas_h)
-    bitmap_rep_write_row_bytes(out_rep, out_buf)
-    return encode_png(out_rep)
 
 def compute_text_advance_px(font, master, text, contract):
     """Sum of glyph advance widths in canvas pixels (no AppKit needed).
@@ -332,13 +426,13 @@ def tight_canvas_contract(font, master, text, contract):
     """Return a copy of *contract* with canvas_w/canvas_h/margin_x derived from glyph advances.
 
     Mirrors the tight-crop logic in ``render_layer_run`` so other renderers
-    (e.g. render_diff) can reuse the same sizing before allocating bitmaps.
+    (e.g. render_specimen_diff) can reuse the same sizing before allocating bitmaps.
     """
     text_w_px = compute_text_advance_px(font, master, text, contract)
-    pad_px = max(8.0, text_w_px * _RENDER_PAD_FRAC)
+    em_px = float(contract.get("em_px", 160.0))
+    pad_px = specimen_pad_px(em_px)
     canvas_w = max(120, int(text_w_px + 2.0 * pad_px))
     baseline_y = float(contract.get("baseline_y", 56.0))
-    em_px = float(contract.get("em_px", 160.0))
     canvas_h = max(80, int(baseline_y + em_px * 1.1))
     c = dict(contract)
     c["canvas_w"] = canvas_w
@@ -364,8 +458,6 @@ def guide_color_ycbcr(idx, n, y=0.55, radius=0.25):
     return max(0.0, min(1.0, r)), max(0.0, min(1.0, g)), max(0.0, min(1.0, b))
 
 _RENDER_GUIDE_STEP = 32   # pixels between horizontal guide lines
-
-_RENDER_PAD_FRAC = 0.06   # side padding as a fraction of text advance width
 
 _GEOMETRY_LINE_HEIGHT_FACTOR = 1.25
 
@@ -658,33 +750,6 @@ def render_layer_run(font, master, text, contract):
 
     return encode_png(rep)
 
-def render_white_on_black_rep(font, master, text, contract):
-    """Rasterize glyph fills as white on an opaque black background (single mask pass)."""
-    from AppKit import (
-        NSBezierPath,
-        NSColor,
-        NSCompositingOperationSourceOver,
-        NSGraphicsContext,
-    )
-
-    canvas_w = int(contract.get("canvas_w", 900))
-    canvas_h = int(contract.get("canvas_h", 260))
-    rep = make_bitmap_rep(canvas_w, canvas_h)
-    gc = NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep)
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.setCurrentContext_(gc)
-    try:
-        NSColor.blackColor().set()
-        NSBezierPath.bezierPathWithRect_(((0, 0), (canvas_w, canvas_h))).fill()
-        NSGraphicsContext.currentContext().setCompositingOperation_(
-            NSCompositingOperationSourceOver
-        )
-        NSColor.whiteColor().set()
-        draw_glyphs_run(font, master, text, contract)
-    finally:
-        NSGraphicsContext.restoreGraphicsState()
-    return rep
-
 def bitmap_rep_row_bytes(rep):
     """Copy packed row bytes from a non-planar 32-bpp ``NSBitmapImageRep`` (includes row padding)."""
     bpr = int(rep.bytesPerRow())
@@ -738,7 +803,93 @@ def bitmap_rep_write_row_bytes(rep, buf):
         raw = (c_char * n).from_buffer(buf)
         memmove(int(ptr), addressof(raw), n)
 
-def render_overlay_run(font, master, lines, font_size_px, store):
-    """Render the R/G overlay: red = pre (snapshot), green = post (live), yellow = overlap."""
-    result = render_overlay_tiered(font, master, lines, font_size_px, store)
-    return result.png_bytes
+
+def decode_png_rep(png_bytes):
+    from AppKit import NSBitmapImageRep, NSData
+
+    data = NSData.dataWithBytes_length_(png_bytes, len(png_bytes))
+    rep = NSBitmapImageRep.imageRepWithData_(data)
+    if rep is None:
+        raise RuntimeError("failed to decode PNG")
+    return rep
+
+
+def pad_png_to_canvas(png_bytes, src_w, src_h, target_w, target_h):
+    """Pad a black-on-white specimen PNG with white: extra width right, extra height top."""
+    if src_w == target_w and src_h == target_h:
+        return png_bytes
+    if src_w > target_w or src_h > target_h:
+        raise RuntimeError("cannot pad PNG to a smaller canvas")
+    from AppKit import NSBezierPath, NSColor, NSGraphicsContext
+
+    src = decode_png_rep(png_bytes)
+    out = make_bitmap_rep(int(target_w), int(target_h))
+    gc = NSGraphicsContext.graphicsContextWithBitmapImageRep_(out)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.setCurrentContext_(gc)
+    try:
+        NSColor.whiteColor().set()
+        NSBezierPath.bezierPathWithRect_(((0, 0), (target_w, target_h))).fill()
+        src.drawInRect_(((0, 0), (src_w, src_h)))
+    finally:
+        NSGraphicsContext.restoreGraphicsState()
+    return encode_png(out)
+
+
+def _copy_rep_to_plugin_bitmap(src, w, h):
+    """Blit *src* into a ``make_bitmap_rep`` so row stride matches plugin bitmaps."""
+    from AppKit import NSBezierPath, NSColor, NSGraphicsContext
+
+    out = make_bitmap_rep(int(w), int(h))
+    gc = NSGraphicsContext.graphicsContextWithBitmapImageRep_(out)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.setCurrentContext_(gc)
+    try:
+        NSColor.whiteColor().set()
+        NSBezierPath.bezierPathWithRect_(((0, 0), (w, h))).fill()
+        src.drawInRect_(((0, 0), (w, h)))
+    finally:
+        NSGraphicsContext.restoreGraphicsState()
+    return out
+
+
+def overlay_from_specimen_pngs(pre_png, post_png):
+    """Red/green overlay from two same-size black-on-white specimen PNGs.
+
+    Returns ``(png_bytes, changed_ink_pixels)``.
+    """
+    pre_src = decode_png_rep(pre_png)
+    post_src = decode_png_rep(post_png)
+    w = int(pre_src.pixelsWide())
+    h = int(pre_src.pixelsHigh())
+    if w != int(post_src.pixelsWide()) or h != int(post_src.pixelsHigh()):
+        raise RuntimeError("specimen PNGs differ in size")
+    pre = _copy_rep_to_plugin_bitmap(pre_src, w, h)
+    post = _copy_rep_to_plugin_bitmap(post_src, w, h)
+
+    pre_buf = bitmap_rep_row_bytes(pre)
+    post_buf = bitmap_rep_row_bytes(post)
+    bpr = int(pre.bytesPerRow())
+    pre_ink = bytearray(bpr * h)
+    post_ink = bytearray(bpr * h)
+    changed = 0
+    for y in range(h):
+        row = y * bpr
+        for x in range(w):
+            i = row + x * 4
+            lp = 255 - int(round((pre_buf[i] + pre_buf[i + 1] + pre_buf[i + 2]) / 3.0))
+            lq = 255 - int(round((post_buf[i] + post_buf[i + 1] + post_buf[i + 2]) / 3.0))
+            lp = max(0, min(255, lp))
+            lq = max(0, min(255, lq))
+            pre_ink[i] = pre_ink[i + 1] = pre_ink[i + 2] = lp
+            post_ink[i] = post_ink[i + 1] = post_ink[i + 2] = lq
+            pre_ink[i + 3] = 255
+            post_ink[i + 3] = 255
+            if abs(lp - lq) > 1:
+                changed += 1
+
+    out_buf = bytearray(bpr * h)
+    merge_silhouettes_to_overlay_rg(pre_ink, post_ink, out_buf, bpr, h, w)
+    out_rep = make_bitmap_rep(w, h)
+    bitmap_rep_write_row_bytes(out_rep, out_buf)
+    return encode_png(out_rep), changed

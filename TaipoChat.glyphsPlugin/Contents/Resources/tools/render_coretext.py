@@ -12,7 +12,12 @@ from enum import Enum
 
 from session_log import get_logger
 
-_RENDER_PAD_FRAC = 0.06
+_SPECIMEN_PAD_EM = 0.5
+
+
+def specimen_pad_px(em_px):
+    """Padding on all four sides of a specimen, in canvas pixels (0.5 em)."""
+    return _SPECIMEN_PAD_EM * float(em_px)
 
 _render_logger = get_logger("render")
 
@@ -60,7 +65,7 @@ RENDER_TIER_RELIABLE = {
     ),
     RenderTier.GEOMETRY: (
         "glyph outlines, advance widths, multiline layout; "
-        "precomposed Unicode characters; shape edits visible in render_diff"
+        "precomposed Unicode characters; shape edits visible in render_specimen_diff"
     ),
 }
 
@@ -107,16 +112,7 @@ class RenderSpecimenResult:
     tier1_error: str | None = None
     tier2_error: str | None = None
     coretext_error: str | None = None
-
-
-@dataclass
-class RenderOverlayResult:
-    png_bytes: bytes
-    tier: RenderTier
-    timing: RenderTiming
-    tier1_error: str | None = None
-    tier2_error: str | None = None
-    coretext_error: str | None = None
+    resolved_spec: object | None = None
 
 
 def format_render_tier_block(
@@ -513,6 +509,9 @@ def render_coretext_lines_rep(
     white_on_black=False,
     canvas_w=None,
     canvas_h=None,
+    pad=None,
+    baseline_y0=None,
+    line_height_override=None,
 ):
     """Shape and rasterize *lines* from *otf_path*. Returns PNG bytes and canvas size."""
     import CoreText as CT
@@ -523,14 +522,29 @@ def render_coretext_lines_rep(
 
     ct_font = _make_ct_font(otf_path, font_size_px)
     ascent, _descent, line_height = _line_metrics(ct_font)
+    if line_height_override is not None:
+        line_height = float(line_height_override)
     ct_lines, widths = _build_ct_lines(ct_font, lines, white_on_black=white_on_black)
 
     max_w = max(widths) if widths else float(font_size_px)
-    pad = max(8.0, max_w * _RENDER_PAD_FRAC)
+    if pad is None:
+        pad = specimen_pad_px(font_size_px)
+    else:
+        pad = float(pad)
     if canvas_w is None:
         canvas_w = max(120, int(max_w + 2.0 * pad))
+    else:
+        canvas_w = max(int(canvas_w), max(120, int(max_w + 2.0 * pad)))
     if canvas_h is None:
         canvas_h = max(80, int(pad + max(1, len(ct_lines)) * line_height + pad))
+    else:
+        canvas_h = int(canvas_h)
+
+    if baseline_y0 is None:
+        first_baseline = canvas_h - pad - ascent
+        baselines = [first_baseline - i * line_height for i in range(len(ct_lines))]
+    else:
+        baselines = [float(baseline_y0) - i * line_height for i in range(len(ct_lines))]
 
     rep = make_bitmap_rep(int(canvas_w), int(canvas_h))
     gc = NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep)
@@ -544,14 +558,18 @@ def render_coretext_lines_rep(
         NSBezierPath.bezierPathWithRect_(((0, 0), (canvas_w, canvas_h))).fill()
 
         ctx = gc.CGContext()
-        for i, ctline in enumerate(ct_lines):
-            baseline_y = canvas_h - pad - ascent - i * line_height
+        for ctline, baseline_y in zip(ct_lines, baselines):
             Quartz.CGContextSetTextPosition(ctx, pad, baseline_y)
             CT.CTLineDraw(ctline, ctx)
     finally:
         NSGraphicsContext.restoreGraphicsState()
 
-    return rep, int(canvas_w), int(canvas_h)
+    camera = {
+        "pad": float(pad),
+        "baseline_y0": float(baselines[0]) if baselines else float(canvas_h - pad - ascent),
+        "line_height": float(line_height),
+    }
+    return rep, int(canvas_w), int(canvas_h), camera
 
 
 def render_coretext_lines_png(
@@ -562,22 +580,52 @@ def render_coretext_lines_png(
     white_on_black=False,
     canvas_w=None,
     canvas_h=None,
-) -> tuple[bytes, int, int]:
+    pad=None,
+    baseline_y0=None,
+    line_height_override=None,
+) -> tuple[bytes, int, int, dict]:
     from tools.render import encode_png
 
-    rep, cw, ch = render_coretext_lines_rep(
+    rep, cw, ch, camera = render_coretext_lines_rep(
         otf_path,
         lines,
         font_size_px,
         white_on_black=white_on_black,
         canvas_w=canvas_w,
         canvas_h=canvas_h,
+        pad=pad,
+        baseline_y0=baseline_y0,
+        line_height_override=line_height_override,
     )
-    return encode_png(rep), cw, ch
+    return encode_png(rep), cw, ch, camera
+
+
+def _spec_layout_kwargs(spec):
+    if spec is None or not getattr(spec, "origin_locked", False):
+        return {}
+    return {
+        "canvas_w": spec.canvas_w,
+        "canvas_h": spec.canvas_h,
+        "pad": spec.pad,
+        "baseline_y0": spec.baseline_y0,
+        "line_height_override": spec.line_height,
+    }
+
+
+def _resolve_spec(spec, canvas_w, canvas_h, camera):
+    if spec is None or camera is None:
+        return None
+    return spec.with_locked_camera(
+        canvas_w,
+        canvas_h,
+        camera["pad"],
+        camera["baseline_y0"],
+        camera["line_height"],
+    )
 
 
 def render_specimen_tiered(
-    font, master, lines, font_size_px
+    font, master, lines, font_size_px, spec=None
 ) -> RenderSpecimenResult:
     """Render specimen using best available tier (CoreText export or geometry fallback)."""
     timing = RenderTiming()
@@ -597,8 +645,12 @@ def render_specimen_tiered(
         coretext_err = None
         try:
             t_render = time.perf_counter()
-            png_bytes, canvas_w, canvas_h = render_coretext_lines_png(
-                otf_path, lines, font_size_px, white_on_black=False
+            png_bytes, canvas_w, canvas_h, camera = render_coretext_lines_png(
+                otf_path,
+                lines,
+                font_size_px,
+                white_on_black=False,
+                **_spec_layout_kwargs(spec),
             )
             timing.render_ms = (time.perf_counter() - t_render) * 1000.0
             timing.total_ms = (time.perf_counter() - t0) * 1000.0
@@ -610,6 +662,7 @@ def render_specimen_tiered(
                 timing=timing,
                 tier1_error=tier1_err,
                 tier2_error=tier2_err,
+                resolved_spec=_resolve_spec(spec, canvas_w, canvas_h, camera),
             )
         except RuntimeError as exc:
             coretext_err = str(exc)
@@ -622,7 +675,7 @@ def render_specimen_tiered(
 
         t_render = time.perf_counter()
         png_bytes, canvas_w, canvas_h = render_specimen_geometry(
-            font, master, lines, font_size_px
+            font, master, lines, font_size_px, spec=spec
         )
         timing.render_ms = (time.perf_counter() - t_render) * 1000.0
         timing.total_ms = (time.perf_counter() - t0) * 1000.0
@@ -635,13 +688,23 @@ def render_specimen_tiered(
             tier1_error=tier1_err,
             tier2_error=tier2_err,
             coretext_error=coretext_err,
+            resolved_spec=_resolve_spec(
+                spec,
+                canvas_w,
+                canvas_h,
+                {
+                    "pad": spec.pad if spec is not None else 0.0,
+                    "baseline_y0": spec.baseline_y0 if spec is not None else 56.0,
+                    "line_height": spec.line_height if spec is not None else 0.0,
+                },
+            ),
         )
 
     from tools.render import render_specimen_geometry
 
     t_render = time.perf_counter()
     png_bytes, canvas_w, canvas_h = render_specimen_geometry(
-        font, master, lines, font_size_px
+        font, master, lines, font_size_px, spec=spec
     )
     timing.render_ms = (time.perf_counter() - t_render) * 1000.0
     timing.total_ms = (time.perf_counter() - t0) * 1000.0
@@ -653,6 +716,16 @@ def render_specimen_tiered(
         timing=timing,
         tier1_error=tier1_err,
         tier2_error=tier2_err,
+        resolved_spec=_resolve_spec(
+            spec,
+            canvas_w,
+            canvas_h,
+            {
+                "pad": spec.pad if spec is not None else 0.0,
+                "baseline_y0": spec.baseline_y0 if spec is not None else 56.0,
+                "line_height": spec.line_height if spec is not None else 0.0,
+            },
+        ),
     )
 
 
@@ -664,180 +737,3 @@ def render_specimen_with_coretext(font, master, lines, font_size_px) -> tuple[by
             result.tier2_error or result.tier1_error or "CoreText export failed."
         )
     return result.png_bytes, result.canvas_w, result.canvas_h, result.timing
-
-
-def render_coretext_silhouette_png(font, master, lines, font_size_px) -> tuple[bytes, int, int, float]:
-    """White-on-black CoreText mask; returns compile_ms for one export."""
-    t_compile = time.perf_counter()
-    otf_path, err = compile_font_to_temp_otf(font, master)
-    compile_ms = (time.perf_counter() - t_compile) * 1000.0
-    if err:
-        raise RuntimeError(err)
-    try:
-        png_bytes, canvas_w, canvas_h = render_coretext_lines_png(
-            otf_path, lines, font_size_px, white_on_black=True
-        )
-    finally:
-        cleanup_temp_otf(otf_path)
-    return png_bytes, canvas_w, canvas_h, compile_ms
-
-
-def _silhouette_rep_from_otf(otf_path, lines, font_size_px, canvas_w=None, canvas_h=None):
-    return render_coretext_lines_rep(
-        otf_path,
-        lines,
-        font_size_px,
-        white_on_black=True,
-        canvas_w=canvas_w,
-        canvas_h=canvas_h,
-    )
-
-
-def _silhouette_rep(font, master, lines, font_size_px, canvas_w=None, canvas_h=None):
-    otf_path, err = compile_font_to_temp_otf(font, master)
-    if err:
-        raise RuntimeError(err)
-    try:
-        return _silhouette_rep_from_otf(
-            otf_path, lines, font_size_px, canvas_w=canvas_w, canvas_h=canvas_h
-        )
-    finally:
-        cleanup_temp_otf(otf_path)
-
-
-def _compile_otf_at_tier(font, master, tier: RenderTier) -> tuple[str | None, str | None]:
-    if tier == RenderTier.CORETEXT_FULL:
-        return compile_font_to_temp_otf(font, master)
-    if tier == RenderTier.CORETEXT_NO_FEATURES:
-        return compile_font_stripped_to_temp_otf(font, master)
-    return None, "geometry tier has no OTF export"
-
-
-def render_overlay_tiered(
-    font, master, lines, font_size_px, store
-) -> RenderOverlayResult:
-    """R/G overlay via best available tier."""
-    from tools.render import (
-        bitmap_rep_row_bytes,
-        bitmap_rep_write_row_bytes,
-        encode_png,
-        make_bitmap_rep,
-        merge_silhouettes_to_overlay_rg,
-        render_overlay_geometry,
-    )
-    from tools.snapshot import apply_snapshot, snapshot_glyphs
-
-    t0 = time.perf_counter()
-    probe_otf, tier, tier1_err, tier2_err = compile_for_render(font, master)
-    _log_export_tiers(tier, tier1_err, tier2_err)
-    if probe_otf:
-        cleanup_temp_otf(probe_otf)
-
-    if tier == RenderTier.GEOMETRY:
-        timing = RenderTiming(compile_count=0)
-        t_render = time.perf_counter()
-        png_bytes = render_overlay_geometry(font, master, lines, font_size_px, store)
-        timing.render_ms = (time.perf_counter() - t_render) * 1000.0
-        timing.total_ms = (time.perf_counter() - t0) * 1000.0
-        return RenderOverlayResult(
-            png_bytes=png_bytes,
-            tier=RenderTier.GEOMETRY,
-            timing=timing,
-            tier1_error=tier1_err,
-            tier2_error=tier2_err,
-        )
-
-    timing = RenderTiming(compile_count=2 if tier == RenderTier.CORETEXT_FULL else 4)
-    compile_ms = 0.0
-
-    current_snap = snapshot_glyphs(font, store._glyph_names)
-    apply_snapshot(font, store._slot)
-    try:
-        t_c = time.perf_counter()
-        pre_otf, err = _compile_otf_at_tier(font, master, tier)
-        compile_ms += (time.perf_counter() - t_c) * 1000.0
-        if err:
-            raise RuntimeError(err)
-    finally:
-        apply_snapshot(font, current_snap)
-
-    t_c = time.perf_counter()
-    post_otf, err = _compile_otf_at_tier(font, master, tier)
-    compile_ms += (time.perf_counter() - t_c) * 1000.0
-    if err:
-        cleanup_temp_otf(pre_otf)
-        raise RuntimeError(err)
-
-    timing.compile_ms = compile_ms
-
-    coretext_err = None
-    try:
-        try:
-            pre_rep, pre_w, pre_h = _silhouette_rep_from_otf(pre_otf, lines, font_size_px)
-            unregister_temp_font(pre_otf)
-            post_rep, post_w, post_h = _silhouette_rep_from_otf(post_otf, lines, font_size_px)
-            canvas_w = max(pre_w, post_w)
-            canvas_h = max(pre_h, post_h)
-            if (pre_w, pre_h) != (canvas_w, canvas_h):
-                pre_rep, _, _ = _silhouette_rep_from_otf(
-                    pre_otf, lines, font_size_px, canvas_w=canvas_w, canvas_h=canvas_h
-                )
-            if (post_w, post_h) != (canvas_w, canvas_h):
-                post_rep, _, _ = _silhouette_rep_from_otf(
-                    post_otf, lines, font_size_px, canvas_w=canvas_w, canvas_h=canvas_h
-                )
-        finally:
-            cleanup_temp_otf(pre_otf)
-            cleanup_temp_otf(post_otf)
-
-        bpr = int(pre_rep.bytesPerRow())
-        h = int(pre_rep.pixelsHigh())
-        w = int(pre_rep.pixelsWide())
-        if (
-            bpr != int(post_rep.bytesPerRow())
-            or h != int(post_rep.pixelsHigh())
-            or w != int(post_rep.pixelsWide())
-        ):
-            raise RuntimeError("overlay silhouette bitmaps differ in layout")
-
-        pre_buf = bitmap_rep_row_bytes(pre_rep)
-        post_buf = bitmap_rep_row_bytes(post_rep)
-        out_buf = bytearray(bpr * h)
-        merge_silhouettes_to_overlay_rg(pre_buf, post_buf, out_buf, bpr, h, w)
-
-        t_render = time.perf_counter()
-        out_rep = make_bitmap_rep(canvas_w, canvas_h)
-        bitmap_rep_write_row_bytes(out_rep, out_buf)
-        png_bytes = encode_png(out_rep)
-        timing.render_ms = (time.perf_counter() - t_render) * 1000.0
-        timing.total_ms = (time.perf_counter() - t0) * 1000.0
-        return RenderOverlayResult(
-            png_bytes=png_bytes,
-            tier=tier,
-            timing=timing,
-            tier1_error=tier1_err,
-            tier2_error=tier2_err,
-        )
-    except RuntimeError as exc:
-        coretext_err = str(exc)
-
-    _log_coretext_fallback(coretext_err, "render_overlay")
-
-    t_render = time.perf_counter()
-    png_bytes = render_overlay_geometry(font, master, lines, font_size_px, store)
-    timing.render_ms = (time.perf_counter() - t_render) * 1000.0
-    timing.total_ms = (time.perf_counter() - t0) * 1000.0
-    return RenderOverlayResult(
-        png_bytes=png_bytes,
-        tier=RenderTier.GEOMETRY,
-        timing=timing,
-        tier1_error=tier1_err,
-        tier2_error=tier2_err,
-        coretext_error=coretext_err,
-    )
-
-
-def render_overlay_coretext(font, master, lines, font_size_px, store) -> tuple[bytes, RenderTiming]:
-    """R/G overlay via CoreText silhouettes (tiered; prefer ``render_overlay_tiered``)."""
-    result = render_overlay_tiered(font, master, lines, font_size_px, store)
-    return result.png_bytes, result.timing

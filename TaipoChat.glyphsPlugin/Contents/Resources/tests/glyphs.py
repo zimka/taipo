@@ -208,33 +208,45 @@ def _test_get_glyph_anchors():
         ) in out, out
 
 
-def _test_snapshot_anchors_roundtrip():
-    import tools
-
+def _test_render_specimen_diff():
     font = _open_font()
-    with _TaipoTestFixture(font) as (glyph, master, layer):
-        ctx = _tool_context(font)
-        store = tools.SnapshotStore()
-        ctx.snapshot_store = store
+    ctx = _tool_context(font)
+    master = font.masters[0]
+    specimen = {"text": "H", "master": master.name, "size": 80}
 
+    result = execute_tool("render_specimen", specimen, ctx)
+    assert isinstance(result, list) and len(result) == 2, result
+    header, png_bytes = result
+    assert "render_specimen_id=1" in header, header
+    assert isinstance(png_bytes, bytes) and png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+
+    out = execute_tool(
+        "render_specimen_diff", {"reference_render_specimen_id": 1}, ctx
+    )
+    assert isinstance(out, list) and len(out) == 2, out
+    diff_header, diff_png = out
+    assert diff_header.startswith("render_specimen_diff"), diff_header
+    assert "reference_id=1" in diff_header, diff_header
+    assert isinstance(diff_png, bytes) and diff_png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    glyph = font.glyphs["H"]
+    if glyph is None:
+        print("SKIP width-increase overlay check (no H glyph)")
+        return
+    layer = glyph.layers[master.id]
+    if layer is None:
+        return
+    old_width = float(layer.width)
+    try:
+        layer.width = old_width + 200
         out = execute_tool(
-            "save_snapshot",
-            {"glyph_names": [glyph.name]},
-            ctx,
+            "render_specimen_diff", {"reference_render_specimen_id": 1}, ctx
         )
-        assert "Snapshot saved" in out, out
-
-        anchor = layer.anchorForName_(TEST_ANCHOR_NAME)
-        assert anchor is not None, "test anchor missing"
-        anchor.position = (TEST_ANCHOR_X + 50, TEST_ANCHOR_Y + 25)
-
-        out = execute_tool("reset_snapshot", {}, ctx)
-        assert "Snapshot restored" in out, out
-
-        anchor = layer.anchorForName_(TEST_ANCHOR_NAME)
-        assert anchor is not None
-        assert abs(float(anchor.position.x) - TEST_ANCHOR_X) < 0.01
-        assert abs(float(anchor.position.y) - TEST_ANCHOR_Y) < 0.01
+        assert isinstance(out, list) and len(out) == 2, out
+        assert "canvas=" in out[0], out[0]
+        assert isinstance(out[1], bytes) and out[1][:8] == b"\x89PNG\r\n\x1a\n"
+    finally:
+        layer.width = old_width
 
 
 def _test_render_glyph_png():
@@ -273,7 +285,7 @@ def run_glyphs_tests():
     _require_glyphs()
     _test_environment()
     _test_get_glyph_anchors()
-    _test_snapshot_anchors_roundtrip()
+    _test_render_specimen_diff()
     _test_render_glyph_png()
     _test_http_client_https()
     print(

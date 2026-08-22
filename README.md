@@ -67,7 +67,7 @@ One window combines settings and chat:
 | **Transcript** | Read-only log of the conversation. |
 | **Message** | What you type to the assistant. **Return** sends; **Shift+Return** adds a new line. **⌘Return** also sends. |
 
-Below the message field: **Send**, **More** (e.g. **New chat**, **Reset snapshot**), and **Reset snapshot** when a snapshot exists.
+Below the message field: **Send** and **Approve plan** when a plan is waiting.
 
 ## About
 
@@ -97,11 +97,9 @@ If your **Base URL** points to **OpenAI**, their API documentation states that c
 
 Provider policies and account settings can change; review the current terms on their site when handling sensitive work. **Other hosts** apply their own rules—consult their documentation when you are not using OpenAI.
 
-## Saving your work and undo
+## Saving your work
 
-- **Save your `.glyphs` file** before long sessions, like any serious edit.
-- Use Glyphs’ **Edit → Undo** after changes you dislike.
-- When the assistant saves a **snapshot**, you can use **Reset snapshot** (or the **More** menu) to align with the plugin’s compare flow; this is separate from Glyphs’ global undo, so keeping **saved files** and **versions** is still best practice.
+- **Save your `.glyphs` file** before long sessions, like any serious edit. Close the file without saving if you want to discard the session’s edits.
 
 ## Using Taipo Chat
 
@@ -118,7 +116,7 @@ Provider policies and account settings can change; review the current terms on t
 | **HTTP errors or “unauthorized”** | Confirm the key is valid, the account can call the chosen **Model**, and billing is active. |
 | **Wrong or empty replies** | For OpenAI, **Base URL** should be `https://api.openai.com` with no path after the host. After switching providers, verify **Base URL** and **Model** match that vendor’s docs. |
 | **Plan never runs** | You must send **`Approve`** on its own once you accept the plan. |
-| **Stuck or slow** | **Cancel** if shown; use **New chat** under **More** to clear context. |
+| **Stuck or slow** | **Cancel** if shown. |
 
 For bugs or features, use **[Issues](https://github.com/zimka/taipo/issues)** on the repository.
 

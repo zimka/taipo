@@ -25,10 +25,10 @@ from tests.mock import (
 )
 
 
-def _ctx(font, snapshot_store=None):
+def _ctx(font):
     import tools
 
-    return tools.ToolContext(font_provider=lambda: font, snapshot_store=snapshot_store)
+    return tools.ToolContext(font_provider=lambda: font)
 
 
 def _test_tool_handlers_pure():
@@ -103,110 +103,76 @@ def _test_tool_handlers_pure():
     assert out.startswith("[error] Unknown tool")
 
 
-def _test_snapshot_store_pure():
-    import tools
-
+def _test_render_specimen_diff_unknown_id():
     font = build_mock_font()
-    store = tools.SnapshotStore()
-    toolset = ModelToolset(_ctx(font, snapshot_store=store))
-
-    assert not store.has_snapshot()
-
-    out = toolset.execute("reset_snapshot", {})
-    assert out.startswith("[error]"), out
-    out = toolset.execute("render_diff", {"text": "Ђ"})
-    assert out.startswith("[error]") and "snapshot" in out.lower(), out
-
-    out = toolset.execute("save_snapshot", {"glyph_names": []})
-    assert out.startswith("[error]"), out
-    out = toolset.execute("save_snapshot", {"glyph_names": ["NoSuch"]})
-    assert out.startswith("[error]") and "NoSuch" in out, out
-
-    out = toolset.execute("save_snapshot", {"glyph_names": ["Dje-cy"]})
-    assert "Snapshot saved" in out, out
-    assert store.has_snapshot()
-    assert store._glyph_names == ["Dje-cy"]
-    assert set(store._slot["Dje-cy"].keys()) == {"M_REG", "M_BOLD"}
-    bold_pre = store._slot["Dje-cy"]["M_BOLD"]
-    assert bold_pre["width"] == 1200.0
-    ys_pre = sorted(int(n["y"]) for n in bold_pre["paths"][0]["nodes"])
-    assert ys_pre == [1230, 1230, 1420, 1420]
-
-    toolset.execute(
-        "move_nodes",
-        {
-            "glyph": "Dje-cy",
-            "master": "Bold",
-            "path": 0,
-            "nodes": [0, 1],
-            "dx": 0,
-            "dy": -72,
-        },
-    )
-    layer = font.glyphs["Dje-cy"].layers["M_BOLD"]
-    ys_mid = sorted(int(n.position.y) for n in layer.paths[0].nodes)
-    assert ys_mid == [1158, 1158, 1420, 1420], ys_mid
-
-    out = toolset.execute("reset_snapshot", {})
-    assert "Snapshot restored" in out, out
-    ys_post = sorted(int(n.position.y) for n in layer.paths[0].nodes)
-    assert ys_post == [1230, 1230, 1420, 1420], ys_post
-    assert store.has_snapshot(), "snapshot should persist after reset"
-
-    out = toolset.execute("save_snapshot", {"glyph_names": ["Dje-cy"]})
-    assert "Overwrote previous snapshot" in out, out
-
-    store.clear()
-    assert not store.has_snapshot()
-    out = toolset.execute("reset_snapshot", {})
-    assert out.startswith("[error]"), out
+    toolset = ModelToolset(_ctx(font))
+    out = toolset.execute("render_specimen_diff", {"reference_render_specimen_id": 1})
+    assert out.startswith("[error]") and "render_specimen_id" in out.lower(), out
 
 
-def _assert_render_diff_ok(out, *, master="Bold", snapshot_glyph="Dje-cy"):
-    """Successful render_diff returns [header, png_bytes]."""
+def _assert_render_specimen_ok(out, *, master="Bold"):
     assert isinstance(out, list) and len(out) == 2, out
     header, png_bytes = out
     assert isinstance(header, str), type(header)
-    assert header.startswith("render_diff"), header
+    assert "render_specimen_id=" in header, header
+    assert header.splitlines()[1].startswith("render_specimen"), header
     assert master in header, header
-    assert snapshot_glyph in header, header
+    assert isinstance(png_bytes, bytes), type(png_bytes)
+    assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n", png_bytes[:16]
+    return int(header.split("render_specimen_id=", 1)[1].split(None, 1)[0].split("\n", 1)[0])
+
+
+def _assert_render_specimen_diff_ok(out, *, reference_id, master="Bold"):
+    assert isinstance(out, list) and len(out) == 2, out
+    header, png_bytes = out
+    assert isinstance(header, str), type(header)
+    assert header.startswith("render_specimen_diff"), header
+    assert "reference_id=%d" % reference_id in header, header
+    assert master in header, header
     assert isinstance(png_bytes, bytes), type(png_bytes)
     assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n", png_bytes[:16]
 
 
-def _test_render_diff_sequential():
-    """save_snapshot must enable render_diff; edits should still produce a PNG overlay."""
-    from tests._render_stubs import stub_render_overlay_deps
-
-    import tools
+def _test_render_specimen_diff_sequential():
+    from tests._render_stubs import stub_render_with_spec_deps
 
     font = build_mock_font()
-    store = tools.SnapshotStore()
-    toolset = ModelToolset(_ctx(font, snapshot_store=store))
+    toolset = ModelToolset(_ctx(font))
 
-    out = toolset.execute("save_snapshot", {"glyph_names": ["Dje-cy"]})
-    assert "Snapshot saved" in out, out
+    out = toolset.execute("render_specimen_diff", {"reference_render_specimen_id": 1})
+    assert out.startswith("[error]"), out
 
-    with stub_render_overlay_deps():
-        out = toolset.execute("render_diff", {"text": "Ђ", "master": "Bold"})
-        _assert_render_diff_ok(out)
-
-        toolset.execute(
-            "move_nodes",
-            {
-                "glyph": "Dje-cy",
-                "master": "Bold",
-                "path": 0,
-                "nodes": [0, 1],
-                "dx": 0,
-                "dy": -72,
-            },
-        )
+    with stub_render_with_spec_deps():
+        out = toolset.execute("render_specimen", {"text": "Ђ", "master": "Bold"})
+        rid = _assert_render_specimen_ok(out)
         out = toolset.execute(
-            "render_diff",
-            {"text": "Ђ", "master": "Bold", "size": 220},
+            "render_specimen_diff", {"reference_render_specimen_id": rid}
         )
-        _assert_render_diff_ok(out)
+        _assert_render_specimen_diff_ok(out, reference_id=rid)
+
+        out = toolset.execute(
+            "render_specimen_diff", {"reference_render_specimen_id": 99}
+        )
+        assert isinstance(out, str) and out.startswith("[error]"), out
+
+
+def _test_render_specimen_diff_tier_mismatch():
+    from tests._render_stubs import stub_render_with_spec_deps
+    from tools.render_coretext import RenderTier
+
+    font = build_mock_font()
+    toolset = ModelToolset(_ctx(font))
+    with stub_render_with_spec_deps(
+        tiers=[RenderTier.CORETEXT_FULL, RenderTier.GEOMETRY]
+    ):
+        out = toolset.execute("render_specimen", {"text": "Ђ", "master": "Bold"})
+        rid = _assert_render_specimen_ok(out)
+        out = toolset.execute(
+            "render_specimen_diff", {"reference_render_specimen_id": rid}
+        )
+        assert isinstance(out, str), out
+        assert "overlay skipped" in out, out
+        assert "current_tier=geometry" in out, out
 
 
 def _test_numeric_judge_new_helpers():
@@ -334,15 +300,6 @@ def _test_numeric_judge_no_mutations():
     ctx = _ctx(font)
     toolset = ModelToolset(ctx)
 
-    original_save = ctx.snapshot_store.save
-    mutations = []
-
-    def tracked_save(*a, **kw):
-        mutations.append("save")
-        return original_save(*a, **kw)
-
-    ctx.snapshot_store.save = tracked_save
-
     layer_bold = font.glyphs["Dje-cy"].layers["M_BOLD"]
     original_x = float(layer_bold.paths[0].nodes[0].position.x)
 
@@ -356,7 +313,6 @@ def _test_numeric_judge_no_mutations():
     )
 
     assert float(layer_bold.paths[0].nodes[0].position.x) == original_x, "font was mutated"
-    assert not mutations, "snapshot was saved unexpectedly"
 
 
 def _test_get_glyph_component_transform():
@@ -441,8 +397,9 @@ def _test_direct_method_calls():
 def run_smoke_model_toolset():
     """Run ModelToolset behavioral tests (mirrors relevant smoke.py cases)."""
     _test_tool_handlers_pure()
-    _test_snapshot_store_pure()
-    _test_render_diff_sequential()
+    _test_render_specimen_diff_unknown_id()
+    _test_render_specimen_diff_sequential()
+    _test_render_specimen_diff_tier_mismatch()
     _test_numeric_judge_new_helpers()
     _test_numeric_judge_basic()
     _test_numeric_judge_dist_and_area()

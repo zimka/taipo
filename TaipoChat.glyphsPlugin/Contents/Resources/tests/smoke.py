@@ -279,94 +279,100 @@ def _test_agent_loop_fake():
     assert s.messages[-2]["role"] == "user"
 
 
-def _test_snapshot_store_pure():
+def _test_render_specimen_diff_unknown_id():
     import tools
 
     font = build_mock_font()
-    store = tools.SnapshotStore()
-    ctx = tools.ToolContext(font_provider=lambda: font, snapshot_store=store)
-
-    assert not store.has_snapshot()
-
-    out = execute_tool("reset_snapshot", {}, ctx)
-    assert out.startswith("[error]"), out
-    out = execute_tool("render_diff", {"text": "Ђ"}, ctx)
-    assert out.startswith("[error]") and "snapshot" in out.lower(), out
-
-    out = execute_tool("save_snapshot", {"glyph_names": []}, ctx)
-    assert out.startswith("[error]"), out
-    out = execute_tool("save_snapshot", {"glyph_names": ["NoSuch"]}, ctx)
-    assert out.startswith("[error]") and "NoSuch" in out, out
-
-    out = execute_tool("save_snapshot", {"glyph_names": ["Dje-cy"]}, ctx)
-    assert "Snapshot saved" in out, out
-    assert store.has_snapshot()
-    assert store._glyph_names == ["Dje-cy"]
-    assert set(store._slot["Dje-cy"].keys()) == {"M_REG", "M_BOLD"}
-    bold_pre = store._slot["Dje-cy"]["M_BOLD"]
-    assert bold_pre["width"] == 1200.0
-    ys_pre = sorted(int(n["y"]) for n in bold_pre["paths"][0]["nodes"])
-    assert ys_pre == [1230, 1230, 1420, 1420]
-
-    execute_tool(
-        "move_nodes",
-        {
-            "glyph": "Dje-cy",
-            "master": "Bold",
-            "path": 0,
-            "nodes": [0, 1],
-            "dx": 0,
-            "dy": -72,
-        },
-        ctx,
-    )
-    layer = font.glyphs["Dje-cy"].layers["M_BOLD"]
-    ys_mid = sorted(int(n.position.y) for n in layer.paths[0].nodes)
-    assert ys_mid == [1158, 1158, 1420, 1420], ys_mid
-
-    out = execute_tool("reset_snapshot", {}, ctx)
-    assert "Snapshot restored" in out, out
-    ys_post = sorted(int(n.position.y) for n in layer.paths[0].nodes)
-    assert ys_post == [1230, 1230, 1420, 1420], ys_post
-    assert store.has_snapshot(), "snapshot should persist after reset"
-
-    out = execute_tool("save_snapshot", {"glyph_names": ["Dje-cy"]}, ctx)
-    assert "Overwrote previous snapshot" in out, out
-
-    store.clear()
-    assert not store.has_snapshot()
-    out = execute_tool("reset_snapshot", {}, ctx)
-    assert out.startswith("[error]"), out
+    ctx = tools.ToolContext(font_provider=lambda: font)
+    out = execute_tool("render_specimen_diff", {"reference_render_specimen_id": 1}, ctx)
+    assert out.startswith("[error]") and "render_specimen_id" in out.lower(), out
 
 
-def _assert_render_diff_ok(out, *, master="Bold", snapshot_glyph="Dje-cy"):
-    """Successful render_diff returns [header, png_bytes]."""
+def _assert_render_specimen_ok(out, *, master="Bold"):
+    """Successful render_specimen returns [header, png_bytes] with an id."""
     assert isinstance(out, list) and len(out) == 2, out
     header, png_bytes = out
     assert isinstance(header, str), type(header)
-    assert header.startswith("render_diff"), header
+    assert "render_specimen_id=" in header, header
+    assert header.splitlines()[1].startswith("render_specimen"), header
     assert master in header, header
-    assert snapshot_glyph in header, header
+    assert isinstance(png_bytes, bytes), type(png_bytes)
+    assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n", png_bytes[:16]
+    return int(header.split("render_specimen_id=", 1)[1].split(None, 1)[0].split("\n", 1)[0])
+
+
+def _assert_render_specimen_diff_ok(out, *, reference_id, master="Bold"):
+    assert isinstance(out, list) and len(out) == 2, out
+    header, png_bytes = out
+    assert isinstance(header, str), type(header)
+    assert header.startswith("render_specimen_diff"), header
+    assert "reference_id=%d" % reference_id in header, header
+    assert master in header, header
     assert isinstance(png_bytes, bytes), type(png_bytes)
     assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n", png_bytes[:16]
 
 
-def _test_render_diff_sequential():
-    """save_snapshot must enable render_diff; edits should still produce a PNG overlay."""
-    from tests._render_stubs import stub_render_overlay_deps
+def _test_render_spec_pure():
+    from tools.render_spec import RenderSpec
+
+    spec = RenderSpec(
+        lines=("AVA",),
+        master_id="M_BOLD",
+        em_px=160.0,
+        canvas_w=200,
+        canvas_h=100,
+        pad=12.0,
+        baseline_y0=56.0,
+        line_height=200.0,
+    )
+    grown = spec.with_canvas(300, 80)
+    assert grown.canvas_w == 300
+    assert grown.canvas_h == 100
+    assert grown.pad == spec.pad
+    assert grown.baseline_y0 == spec.baseline_y0
+    assert grown.line_height == spec.line_height
+    assert grown.origin_locked == spec.origin_locked
+    assert spec.with_canvas(200, 100) is spec
 
     import tools
 
     font = build_mock_font()
-    store = tools.SnapshotStore()
-    ctx = tools.ToolContext(font_provider=lambda: font, snapshot_store=store)
+    ctx = tools.ToolContext(font_provider=lambda: font)
+    built, err = RenderSpec.from_agent_args(
+        {"text": "Ђ", "master": "Bold", "size": 160}, font, ctx
+    )
+    assert err is None, err
+    assert built.lines == ("Ђ",)
+    assert built.master_id == "M_BOLD"
+    assert built.em_px == 160.0
+    assert built.canvas_w >= 120
+    assert built.canvas_h >= 80
+    assert built.origin_locked is False
+    assert built.pad == 80.0
 
-    out = execute_tool("save_snapshot", {"glyph_names": ["Dje-cy"]}, ctx)
-    assert "Snapshot saved" in out, out
 
-    with stub_render_overlay_deps():
-        out = execute_tool("render_diff", {"text": "Ђ", "master": "Bold"}, ctx)
-        _assert_render_diff_ok(out)
+def _test_render_specimen_diff_sequential():
+    """render_specimen assigns ids; render_specimen_diff replays the stored spec."""
+    from tests._render_stubs import stub_render_with_spec_deps
+
+    import tools
+
+    font = build_mock_font()
+    ctx = tools.ToolContext(font_provider=lambda: font)
+
+    out = execute_tool("render_specimen_diff", {"reference_render_specimen_id": 1}, ctx)
+    assert out.startswith("[error]"), out
+    assert "No specimens" in out or "Unknown" in out, out
+
+    with stub_render_with_spec_deps():
+        out = execute_tool("render_specimen", {"text": "Ђ", "master": "Bold"}, ctx)
+        rid = _assert_render_specimen_ok(out)
+        assert rid == 1
+
+        out = execute_tool(
+            "render_specimen_diff", {"reference_render_specimen_id": rid}, ctx
+        )
+        _assert_render_specimen_diff_ok(out, reference_id=rid)
 
         execute_tool(
             "move_nodes",
@@ -381,11 +387,38 @@ def _test_render_diff_sequential():
             ctx,
         )
         out = execute_tool(
-            "render_diff",
-            {"text": "Ђ", "master": "Bold", "size": 220},
-            ctx,
+            "render_specimen_diff", {"reference_render_specimen_id": rid}, ctx
         )
-        _assert_render_diff_ok(out)
+        _assert_render_specimen_diff_ok(out, reference_id=rid)
+
+        out = execute_tool(
+            "render_specimen_diff", {"reference_render_specimen_id": 99}, ctx
+        )
+        assert isinstance(out, str) and out.startswith("[error]"), out
+        assert "99" in out, out
+
+
+def _test_render_specimen_diff_tier_mismatch():
+    from tests._render_stubs import stub_render_with_spec_deps
+    from tools.render_coretext import RenderTier
+
+    import tools
+
+    font = build_mock_font()
+    ctx = tools.ToolContext(font_provider=lambda: font)
+    with stub_render_with_spec_deps(
+        tiers=[RenderTier.CORETEXT_FULL, RenderTier.GEOMETRY]
+    ):
+        out = execute_tool("render_specimen", {"text": "Ђ", "master": "Bold"}, ctx)
+        rid = _assert_render_specimen_ok(out)
+        out = execute_tool(
+            "render_specimen_diff", {"reference_render_specimen_id": rid}, ctx
+        )
+        assert isinstance(out, str), out
+        assert "overlay skipped" in out, out
+        assert "reference_tier=coretext_full" in out, out
+        assert "current_tier=geometry" in out, out
+        assert "Do not treat this result as a visual diff" in out, out
 
 
 def _test_provider_image_injection_single():
@@ -710,15 +743,6 @@ def _test_numeric_judge_no_mutations():
     font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font)
 
-    original_save = ctx.snapshot_store.save
-    mutations = []
-
-    def tracked_save(*a, **kw):
-        mutations.append("save")
-        return original_save(*a, **kw)
-
-    ctx.snapshot_store.save = tracked_save
-
     layer_bold = font.glyphs["Dje-cy"].layers["M_BOLD"]
     original_x = float(layer_bold.paths[0].nodes[0].position.x)
 
@@ -733,7 +757,6 @@ def _test_numeric_judge_no_mutations():
     )
 
     assert float(layer_bold.paths[0].nodes[0].position.x) == original_x, "font was mutated"
-    assert not mutations, "snapshot was saved unexpectedly"
 
 
 def _test_get_glyph_component_transform():
@@ -881,8 +904,10 @@ def run_smoke():
     _test_parse_provider_response()
     _test_tool_handlers_pure()
     _test_agent_loop_fake()
-    _test_snapshot_store_pure()
-    _test_render_diff_sequential()
+    _test_render_specimen_diff_unknown_id()
+    _test_render_spec_pure()
+    _test_render_specimen_diff_sequential()
+    _test_render_specimen_diff_tier_mismatch()
     _test_provider_image_injection_single()
     _test_provider_image_injection_no_images()
     _test_provider_image_injection_multi_in_one_result()

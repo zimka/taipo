@@ -1,6 +1,6 @@
 # encoding: utf-8
 
-from tools.snapshot import SnapshotStore
+from tools.render_registry import RenderRegistry
 
 DEFAULT_RENDER_CONTRACT = {
     "canvas_w": 900,
@@ -14,10 +14,18 @@ DEFAULT_RENDER_CONTRACT = {
 class ToolContext:
     """Plugin-level state passed to every tool call."""
 
-    def __init__(self, font_provider, render_contract=None, snapshot_store=None, api_settings=None):
+    def __init__(
+        self,
+        font_provider,
+        render_contract=None,
+        render_registry=None,
+        api_settings=None,
+    ):
         self._font_provider = font_provider
         self.render_contract = dict(render_contract or DEFAULT_RENDER_CONTRACT)
-        self.snapshot_store = snapshot_store if snapshot_store is not None else SnapshotStore()
+        self.render_registry = (
+            render_registry if render_registry is not None else RenderRegistry()
+        )
         self.api_settings = api_settings if api_settings is not None else {}
         self.debug_info = False
 
