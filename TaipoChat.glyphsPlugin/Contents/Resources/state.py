@@ -4,18 +4,19 @@
 import json
 
 from http_client import HTTPError
-from session_log import get_logger
+from session_log import get_logger, log_chat_message
 
 from utils import (
     DEFAULT_BASE_URL,
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL,
     DEFAULT_SYSTEM_PROMPT,
-    MARKER_PLAN_APPROVAL,
     MAX_AGENT_ITERATIONS,
     _chat_endpoint,
     format_usage_caption,
     load_default_system_prompt,
+    mode_contract_text,
+    normalize_session_mode,
     normalize_tool_result_content,
     normalize_usage,
     parse_max_tokens,
@@ -105,6 +106,7 @@ class ChatState:
         tool_schemas,
         on_event,
         cancel_event=None,
+        session_mode="inspect",
     ):
         """
         Run one "Send" cycle: append ``user_text``, then loop with Anthropic tool-use until the
@@ -121,7 +123,6 @@ class ChatState:
           - ``assistant_text``:      {"kind", "text"}
           - ``tool_use``:            {"kind", "id", "name", "input"}
           - ``tool_result``:         {"kind", "id", "name", "content", "is_error"}
-          - ``approval_required``:   {"kind", "text"}
           - ``done``:                {"kind", "text", "stop_reason"}
           - ``iteration_limit``:     {"kind"}
           - ``cancelled``:           {"kind"}
@@ -130,12 +131,18 @@ class ChatState:
         """
         if user_text is not None:
             self.append_user(user_text)
+            log_chat_message("user", user_text)
             on_event({"kind": "user", "text": user_text})
 
         s = self.settings
         model = (s.get("model") or "").strip() or DEFAULT_MODEL
         max_tokens = parse_max_tokens(s.get("maxTokens") or "")
         system_text = (s.get("systemPrompt") or "").strip()
+        contract = mode_contract_text(normalize_session_mode(session_mode))
+        if system_text:
+            system_text = system_text + "\n\n" + contract
+        else:
+            system_text = contract
         base = (s.get("baseUrl") or "").strip()
         url = _chat_endpoint(base)
         auth = s.get("apiKey") or ""
@@ -186,6 +193,7 @@ class ChatState:
             self.append_assistant_blocks(parsed["content_blocks"])
 
             if parsed["text"]:
+                log_chat_message("assistant", parsed["text"])
                 on_event({"kind": "assistant_text", "text": parsed["text"]})
 
             tool_uses = parsed["tool_uses"]
@@ -202,10 +210,7 @@ class ChatState:
             stop_reason = parsed["stop_reason"]
             if not tool_uses or stop_reason != "tool_use":
                 _txt = parsed["text"] or ""
-                if MARKER_PLAN_APPROVAL in _txt:
-                    on_event({"kind": "approval_required", "text": _txt})
-                else:
-                    on_event({"kind": "done", "text": _txt, "stop_reason": stop_reason})
+                on_event({"kind": "done", "text": _txt, "stop_reason": stop_reason})
                 return
 
             tool_result_blocks = []

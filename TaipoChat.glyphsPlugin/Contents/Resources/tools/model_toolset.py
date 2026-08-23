@@ -34,6 +34,12 @@ from tools.render import (
     handle_render_specimen,
     handle_render_specimen_diff,
 )
+from utils import (
+    SESSION_MODE_EDIT,
+    TOOL_TAG_BOTH_MODES,
+    TOOL_TAG_EDIT_ONLY,
+    normalize_session_mode,
+)
 
 _tools_logger = get_logger("tools")
 
@@ -44,6 +50,7 @@ class ModelToolSpec:
     _MARKER = "_is_model_tool"
     _NAME_ATTR = "_model_tool_name"
     _METADATA_RETURN_ATTR = "_model_tool_metadata_return"
+    _REQUIRES_EDIT_ATTR = "_model_tool_requires_edit"
     _SECTION_HEADERS = frozenset(
         {"Args", "Arguments", "Returns", "Raises", "Note", "Notes", "Examples", "Yields", "Attributes"}
     )
@@ -56,6 +63,10 @@ class ModelToolSpec:
     def tool_name(cls, func) -> str:
         override = getattr(func, cls._NAME_ATTR, None)
         return override if override else func.__name__
+
+    @classmethod
+    def requires_edit(cls, func) -> bool:
+        return bool(getattr(func, cls._REQUIRES_EDIT_ATTR, False))
 
     @classmethod
     def parse_docstring(cls, doc: str | None) -> tuple[str, dict[str, str]]:
@@ -133,6 +144,11 @@ class ModelToolSpec:
         if not cls.is_marked(method):
             raise TypeError("%r is not a model tool" % (method,))
         summary, args_dict = cls.parse_docstring(method.__doc__)
+        tag = TOOL_TAG_EDIT_ONLY if cls.requires_edit(method) else TOOL_TAG_BOTH_MODES
+        if summary:
+            summary = tag + "\n" + summary
+        else:
+            summary = tag
         if getattr(method, cls._METADATA_RETURN_ATTR, False):
             summary = (
                 summary
@@ -260,13 +276,14 @@ class ModelToolSpec:
         return None
 
 
-def model_tool(func=None, *, name=None, metadata_return=False):
+def model_tool(func=None, *, name=None, metadata_return=False, requires_edit=False):
     """Mark a method as exposed to the LLM as a tool."""
 
     def decorate(fn):
         setattr(fn, ModelToolSpec._MARKER, True)
         setattr(fn, ModelToolSpec._NAME_ATTR, name)
         setattr(fn, ModelToolSpec._METADATA_RETURN_ATTR, metadata_return)
+        setattr(fn, ModelToolSpec._REQUIRES_EDIT_ATTR, bool(requires_edit))
         return fn
 
     if func is not None:
@@ -293,28 +310,42 @@ class ModelToolset:
                 schemas.append(ModelToolSpec.from_method(member))
         return schemas
 
+    def _find_tool(self, name: str):
+        for attr, member in type(self).__dict__.items():
+            if callable(member) and ModelToolSpec.is_marked(member):
+                if ModelToolSpec.tool_name(member) == name:
+                    return attr, member
+        return None, None
+
     def execute(self, name: str, args: dict | None = None):
         """Dispatch a tool call. Returns content accepted by ``normalize_tool_result_content``."""
         _tools_logger.info("execute %s args=%s", name, brief_tool_args(args or {}))
+        attr, member = self._find_tool(name)
+        if member is None:
+            result = "[error] Unknown tool: %s" % name
+            _tools_logger.warning("Tool %s returned error: %s", name, result)
+            return result
+        if ModelToolSpec.requires_edit(member) and (
+            normalize_session_mode(getattr(self._ctx, "session_mode", None))
+            != SESSION_MODE_EDIT
+        ):
+            result = (
+                "[error] Tool '%s' is locked in Inspect mode. "
+                "Ask the user to switch to Edit, then call it again."
+                % name
+            )
+            _tools_logger.warning("Tool %s returned error: %s", name, result)
+            return result
         font = self._ctx.font
         if font is None:
             result = "[error] No font is open in Glyphs."
             _tools_logger.warning("Tool %s returned error: %s", name, result)
             return result
-        for attr, member in type(self).__dict__.items():
-            if callable(member) and ModelToolSpec.is_marked(member):
-                if ModelToolSpec.tool_name(member) == name:
-                    result = getattr(self, attr)(**(args or {}))
-                    if isinstance(result, str) and (
-                        result.startswith("[error]")
-                        or result.startswith("[tool error]")
-                    ):
-                        _tools_logger.warning(
-                            "Tool %s returned error: %s", name, result[:500]
-                        )
-                    return result
-        result = "[error] Unknown tool: %s" % name
-        _tools_logger.warning("Tool %s returned error: %s", name, result)
+        result = getattr(self, attr)(**(args or {}))
+        if isinstance(result, str) and (
+            result.startswith("[error]") or result.startswith("[tool error]")
+        ):
+            _tools_logger.warning("Tool %s returned error: %s", name, result[:500])
         return result
 
     @model_tool
@@ -381,7 +412,7 @@ class ModelToolset:
             {"glyph": glyph, "master": master}, self._ctx, self._ctx.font
         )
 
-    @model_tool
+    @model_tool(requires_edit=True)
     def edit_glyph_metadata(
         self,
         glyph: str,
@@ -389,7 +420,7 @@ class ModelToolset:
         master: str | None = None,
     ) -> str:
         """
-        Apply a partial metadata update to a glyph. Requires user approval (same as move_nodes).
+        Apply a partial metadata update to a glyph.
 
         Only keys present in changes are applied. Use null on nullable fields to clear them
         (e.g. clear unicode on .notdef, clear kerning groups, revert classification to
@@ -444,20 +475,20 @@ class ModelToolset:
             self._ctx.font,
         )
 
-    @model_tool
+    @model_tool(requires_edit=True)
     def edit_kerning_pairs(
         self,
         master: str,
         changes: list[dict[str, Any]],
     ) -> str:
         """
-        Write kerning slots via stored_value (null removes the record). Requires approval.
+        Write kerning slots via stored_value (null removes the record).
 
         Operands identical to read_kerning_pairs (@Group or glyph name). Always
         read_kerning_pairs on the same {left, right} before editing — do not infer slots
         from find_kerning_rules or get_glyph_metadata alone.
 
-        Impact levels (disclose in approval plan):
+        Impact levels (disclose in the plan):
         - glyph × glyph: normal
         - class × glyph or glyph × class: high — name class and affected glyphs
         - class × class: highest — name both groups and estimated pair count
@@ -518,18 +549,14 @@ class ModelToolset:
     ):
         """
         Render a short text using the CURRENT state of the open font and return a PNG
-        image. Picks the best available render tier automatically:
+        image. Uses a full compiled-font render when export succeeds. If export
+        fails, falls back to feature-limited or glyph-limited; the result header
+        then lists render_limitations.
 
-        Tier 1 (coretext_full): full OTF export + CoreText — kerning and all OpenType features.
-        Tier 2 (coretext_no_features): export with OT features stripped — outlines, spacing,
-          pair kerning (usually); no ligatures, ccmp, calt, stylistic sets, etc.
-        Tier 3 (geometry): live master outlines, no export — outlines and sidebearings only;
-          no kerning or OpenType features.
-
-        The tool result header starts with render_specimen_id=N, then includes
-        render_tier=..., render_tier_reliable_for, and render_tier_not_reliable_for.
-        Read the tier fields before trusting the image for kerning, ligatures, or
-        composed accents.
+        The result header starts with render_specimen_id=N and includes render=full,
+        render=feature-limited, or render=glyph-limited. When render is full, treat
+        the image as valid and do not mention the mode. When limited, read
+        render_limitations before trusting the listed capabilities.
 
         Note render_specimen_id from the result. Call this BEFORE mutations if you
         will later call render_specimen_diff with that id. Keep the same specimen
@@ -605,7 +632,7 @@ class ModelToolset:
             {"glyphs": glyphs, "master": master, "code": code}, self._ctx, self._ctx.font
         )
 
-    @model_tool
+    @model_tool(requires_edit=True)
     def move_nodes(
         self,
         glyph: str,
@@ -643,7 +670,7 @@ class ModelToolset:
             self._ctx.font,
         )
 
-    @model_tool
+    @model_tool(requires_edit=True)
     def set_width(self, glyph: str, master: str, width: int) -> str:
         """
         Set the advance width (spacing metric) of a glyph in one master.
@@ -667,7 +694,7 @@ class ModelToolset:
         The id must come from an earlier render_specimen in this session. Specimen
         text, master, and size are taken from that stored render — do not pass them.
 
-        If the current render tier or open font differs from the reference, the overlay
+        If the current render or open font differs from the reference, the overlay
         is skipped and a text explanation is returned. Call render_specimen for a
         current image in that case; do not treat a skipped result as a visual diff.
 

@@ -82,13 +82,14 @@ def handle_render_specimen_diff(args, ctx, font):
         msg = [
             "render_specimen_diff overlay skipped — sides are not comparable.",
             "reference_id=%d" % rid,
-            "reference_tier=%s current_tier=%s" % (record.tier.value, result.tier.value),
+            "reference_render=%s current_render=%s"
+            % (record.tier.value, result.tier.value),
             "reference_font=%s" % record.font_identity,
             "current_font=%s" % current_font_id,
         ]
         if result.tier != record.tier:
             msg.append(
-                "Render tier changed. An overlay would be misleading (kerning or "
+                "Render changed. An overlay would be misleading (kerning or "
                 "features may appear or vanish because the rasterizer changed)."
             )
             msg.append(format_render_tier_block(
@@ -127,7 +128,7 @@ def handle_render_specimen_diff(args, ctx, font):
         "render_specimen_diff reference_id=%d master=%s size=%s lines=%r canvas=%dx%d"
         % (rid, master.name, int(spec.em_px), specimen_label, target_w, target_h)
     )
-    header += "\nreference_tier=%s current_tier=%s" % (
+    header += "\nreference_render=%s current_render=%s" % (
         record.tier.value,
         result.tier.value,
     )
@@ -336,7 +337,7 @@ def multiline_canvas_contract(font, master, lines, contract):
     return c
 
 def draw_glyphs_multiline(font, master, lines, contract):
-    """Draw each specimen row on its own baseline (geometry tier)."""
+    """Draw each specimen row on its own baseline (glyph-limited)."""
     line_height = float(contract.get("line_height", contract.get("em_px", 160.0)))
     baseline_y = float(contract.get("baseline_y", 56.0))
     for i, line in enumerate(lines):
@@ -345,7 +346,7 @@ def draw_glyphs_multiline(font, master, lines, contract):
         draw_glyphs_run(font, master, line or " ", line_contract)
 
 def render_specimen_geometry(font, master, lines, font_size_px, spec=None) -> tuple[bytes, int, int]:
-    """Tier 3: draw live master layers without OTF export."""
+    """Glyph-limited: draw live master layers without OTF export."""
     from AppKit import NSBezierPath, NSColor, NSGraphicsContext
 
     contract = _geometry_base_contract(font_size_px)

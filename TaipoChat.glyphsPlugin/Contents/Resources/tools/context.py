@@ -20,6 +20,7 @@ class ToolContext:
         render_contract=None,
         render_registry=None,
         api_settings=None,
+        session_mode="inspect",
     ):
         self._font_provider = font_provider
         self.render_contract = dict(render_contract or DEFAULT_RENDER_CONTRACT)
@@ -28,6 +29,7 @@ class ToolContext:
         )
         self.api_settings = api_settings if api_settings is not None else {}
         self.debug_info = False
+        self.session_mode = session_mode
 
     def debug_info_enabled(self):
         return bool(self.debug_info)

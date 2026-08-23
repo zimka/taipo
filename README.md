@@ -4,7 +4,7 @@
 
 # Taipo Chat
 
-**Taipo Chat** is a chat assistant that lives inside **Glyphs**. You describe a problem in ordinary language; the assistant reads your font, suggests a step-by-step plan, and can apply edits **only after you explicitly allow it** by typing **Approve**.
+**Taipo Chat** is a chat assistant that lives inside **Glyphs**. You describe a problem in ordinary language; the assistant reads your font, compares glyphs, and can apply edits **only in Edit mode**. Sessions start in **Inspect** (read-only). Switch to **Edit** when you want changes; Taipo still proposes a plan and asks if you are fine with it.
 
 → **[taipo.chat](https://taipo.chat)** — demo video and product overview.
 
@@ -67,7 +67,7 @@ One window combines settings and chat:
 | **Transcript** | Read-only log of the conversation. |
 | **Message** | What you type to the assistant. **Return** sends; **Shift+Return** adds a new line. **⌘Return** also sends. |
 
-Below the message field: **Send** and **Approve plan** when a plan is waiting.
+Below the message field: **Inspect | Edit** (session starts in Inspect) and **Send**.
 
 ## About
 
@@ -79,7 +79,7 @@ Example prompts:
 - *"These nodes are misaligned; tighten them up."*
 - *"The spacing looks off between these pairs."*
 
-The assistant can inspect glyph data and **preview images** it generates so it can reason about shapes. It will propose a **plan** and mark when **approval** is required. Your font is **not** changed until you send **`Approve`** as a message by itself (spacing and capitalization do not matter). If the plan should change, answer in **normal prose**; the assistant revises and asks again.
+The assistant can inspect glyph data and **preview images** it generates so it can reason about shapes. In **Inspect**, mutation tools are locked — search, compare, and diagnose only. In **Edit**, those tools can run; Taipo is still instructed to propose a plan and ask before changing the font. If the plan should change, answer in **normal prose**.
 
 ## Privacy
 
@@ -106,7 +106,7 @@ Provider policies and account settings can change; review the current terms on t
 1. Open a font.
 2. Open **Window → Taipo Chat** and confirm your **API key** is set (defaults fill **Base URL** and **Model** for OpenAI).
 3. Describe the issue in the **Message** field and press **Send**.
-4. When a plan awaits your go-ahead, either send **`Approve`** alone or reply in prose to refine the plan.
+4. Stay in **Inspect** to look and compare. Switch to **Edit** when you want Taipo to change the font, then agree the plan in the chat.
 
 ## Troubleshooting
 
@@ -115,7 +115,7 @@ Provider policies and account settings can change; review the current terms on t
 | **“Python” / “Vanilla” errors** | Install both modules from **Plugin Manager → Modules**, set **Python version** to **3.* (Glyphs)** under **Settings → Addons**, then restart Glyphs. |
 | **HTTP errors or “unauthorized”** | Confirm the key is valid, the account can call the chosen **Model**, and billing is active. |
 | **Wrong or empty replies** | For OpenAI, **Base URL** should be `https://api.openai.com` with no path after the host. After switching providers, verify **Base URL** and **Model** match that vendor’s docs. |
-| **Plan never runs** | You must send **`Approve`** on its own once you accept the plan. |
+| **Nothing changes** | The session starts in **Inspect**. Switch to **Edit** if you want mutation tools unlocked. |
 | **Stuck or slow** | **Cancel** if shown. |
 
 For bugs or features, use **[Issues](https://github.com/zimka/taipo/issues)** on the repository.

@@ -1,5 +1,9 @@
 # encoding: utf-8
-"""Session logging for Taipo Chat. Attach assets/last_session.log when reporting tool bugs."""
+"""Session logging for Taipo Chat.
+
+Writes the conversation (user and assistant text), tool calls, and errors to
+``assets/last_session.log``. Attach that file when reporting bugs.
+"""
 
 from __future__ import annotations
 
@@ -46,6 +50,16 @@ def get_logger(name: str) -> logging.Logger:
     if name.startswith(_ROOT_LOGGER_NAME + "."):
         return logging.getLogger(name)
     return logging.getLogger("%s.%s" % (_ROOT_LOGGER_NAME, name))
+
+
+def log_chat_message(role: str, text: str) -> None:
+    """Append a user or assistant message body to the session log."""
+    if text is None:
+        return
+    body = str(text)
+    if not body:
+        return
+    get_logger("agent").info("%s:\n%s", role, body)
 
 
 def brief_tool_args(value: Any, limit: int = 180) -> str:

@@ -71,7 +71,7 @@ def _open_font():
 def _tool_context(font):
     import tools
 
-    return tools.ToolContext(font_provider=lambda: font)
+    return tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
 
 class _TaipoTestFixture(object):

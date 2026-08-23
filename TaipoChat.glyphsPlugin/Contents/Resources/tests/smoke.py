@@ -34,8 +34,12 @@ def _test_utils_basics():
     from utils import (
         _chat_endpoint,
         format_usage_caption,
+        mode_contract_text,
+        mode_switch_notice,
+        normalize_session_mode,
         normalize_tool_result_content,
         normalize_usage,
+        TOOL_TAG_EDIT_ONLY,
     )
 
     assert _chat_endpoint("") == ""
@@ -62,6 +66,15 @@ def _test_utils_basics():
     assert blocks[0]["source"]["media_type"] == "image/png"
     blocks = normalize_tool_result_content(["hdr", b"\x89PNG\r\n\x1a\n"])
     assert blocks[0]["type"] == "text" and blocks[1]["type"] == "image"
+
+    assert normalize_session_mode("Edit") == "edit"
+    assert normalize_session_mode("") == "inspect"
+    inspect_contract = mode_contract_text("inspect")
+    assert inspect_contract.startswith("Current mode: Inspect.")
+    assert TOOL_TAG_EDIT_ONLY in inspect_contract
+    assert mode_contract_text("edit").startswith("Current mode: Edit.")
+    assert "Mutation tools are available" in mode_switch_notice("edit")
+    assert "will not be changed" in mode_switch_notice("inspect")
 
 
 def _test_parse_provider_response():
@@ -123,7 +136,7 @@ def _test_tool_handlers_pure():
     import tools
 
     font = build_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     out = execute_tool("list_masters", {}, ctx)
     assert "Regular" in out and "Bold" in out and "M_BOLD" in out
@@ -196,6 +209,33 @@ def _test_tool_handlers_pure():
 
     out = execute_tool("unknown_tool", {}, ctx)
     assert out.startswith("[error] Unknown tool")
+
+
+def _test_inspect_mode_rejects_mutations():
+    import tools
+
+    font = build_mock_font()
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="inspect")
+    layer = font.glyphs["Dje-cy"].layers["M_BOLD"]
+    before = [(int(n.position.x), int(n.position.y)) for n in layer.paths[0].nodes]
+    out = execute_tool(
+        "move_nodes",
+        {
+            "glyph": "Dje-cy",
+            "master": "Bold",
+            "path": 0,
+            "nodes": [0],
+            "dx": 10,
+            "dy": 0,
+        },
+        ctx,
+    )
+    assert "locked in Inspect mode" in out
+    after = [(int(n.position.x), int(n.position.y)) for n in layer.paths[0].nodes]
+    assert after == before
+
+    out = execute_tool("list_masters", {}, ctx)
+    assert "Regular" in out
 
 
 def _test_agent_loop_fake():
@@ -283,7 +323,7 @@ def _test_render_specimen_diff_unknown_id():
     import tools
 
     font = build_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
     out = execute_tool("render_specimen_diff", {"reference_render_specimen_id": 1}, ctx)
     assert out.startswith("[error]") and "render_specimen_id" in out.lower(), out
 
@@ -337,7 +377,7 @@ def _test_render_spec_pure():
     import tools
 
     font = build_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
     built, err = RenderSpec.from_agent_args(
         {"text": "Ђ", "master": "Bold", "size": 160}, font, ctx
     )
@@ -358,7 +398,7 @@ def _test_render_specimen_diff_sequential():
     import tools
 
     font = build_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     out = execute_tool("render_specimen_diff", {"reference_render_specimen_id": 1}, ctx)
     assert out.startswith("[error]"), out
@@ -405,7 +445,7 @@ def _test_render_specimen_diff_tier_mismatch():
     import tools
 
     font = build_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
     with stub_render_with_spec_deps(
         tiers=[RenderTier.CORETEXT_FULL, RenderTier.GEOMETRY]
     ):
@@ -416,8 +456,8 @@ def _test_render_specimen_diff_tier_mismatch():
         )
         assert isinstance(out, str), out
         assert "overlay skipped" in out, out
-        assert "reference_tier=coretext_full" in out, out
-        assert "current_tier=geometry" in out, out
+        assert "reference_render=full" in out, out
+        assert "current_render=glyph-limited" in out, out
         assert "Do not treat this result as a visual diff" in out, out
 
 
@@ -603,7 +643,7 @@ def _test_numeric_judge_new_helpers():
     import tools
 
     font = build_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     code = """
 p0 = g['Dje-cy'][0]
@@ -651,7 +691,7 @@ def _test_numeric_judge_basic():
     import tools
 
     font = build_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     code = (
         "p0 = g['Dje-cy'][0]\n"
@@ -672,7 +712,7 @@ def _test_numeric_judge_dist_and_area():
     import tools
 
     font = build_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     code = (
         "p0 = g['Dje-cy'][0]\n"
@@ -692,7 +732,7 @@ def _test_numeric_judge_runtime_error():
     import tools
 
     font = build_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     code = (
         "print('before')\n"
@@ -712,7 +752,7 @@ def _test_numeric_judge_missing_glyph():
     import tools
 
     font = build_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     result = execute_tool(
         "numeric_judge",
@@ -727,7 +767,7 @@ def _test_numeric_judge_no_output_message():
     import tools
 
     font = build_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     result = execute_tool(
         "numeric_judge",
@@ -741,7 +781,7 @@ def _test_numeric_judge_no_mutations():
     import tools
 
     font = build_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     layer_bold = font.glyphs["Dje-cy"].layers["M_BOLD"]
     original_x = float(layer_bold.paths[0].nodes[0].position.x)
@@ -763,7 +803,7 @@ def _test_get_glyph_component_transform():
     import tools
 
     font = build_composite_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     out = execute_tool("get_glyph", {"name": "Composite-cy", "master": "Regular"}, ctx)
     assert "components: 1" in out, out
@@ -779,7 +819,7 @@ def _test_numeric_judge_composite_transform():
     import tools
 
     font = build_composite_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     code = (
         "p0 = g['Composite-cy'][0]\n"
@@ -805,7 +845,7 @@ def _test_numeric_judge_composite_mirror():
     comp_layer = _MockLayer(width=1000, paths=[], components=[comp])
     mirrored = _MockGlyph("Mirrored-cy", "FFFD", {"M_REG": comp_layer})
     font.glyphs = _MockGlyphsList(list(font.glyphs) + [mirrored])
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     code = (
         "p0 = g['Mirrored-cy'][0]\n"
@@ -823,7 +863,7 @@ def _test_get_glyph_no_component_uses():
     import tools
 
     font = build_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     out = execute_tool("get_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx)
     assert "used as component in: (none)" in out, out
@@ -864,14 +904,20 @@ def _test_temporary_export_fixups():
 def _test_format_render_tier_block():
     from tools.render_coretext import RenderTier, format_render_tier_block
 
+    full = format_render_tier_block(RenderTier.CORETEXT_FULL)
+    assert full == "render=full"
+    assert "render_limitations" not in full
+    assert "fallback" not in full
+
     block = format_render_tier_block(
         RenderTier.CORETEXT_NO_FEATURES,
         tier1_error="Font export failed: broken feature",
     )
-    assert "render_tier=coretext_no_features" in block
-    assert "render_tier_reliable_for:" in block
-    assert "render_tier_not_reliable_for:" in block
+    assert "render=feature-limited" in block
+    assert "render_limitations:" in block
     assert "full export failed" in block
+    assert "render_tier" not in block
+    assert "reliable_for" not in block
 
     geo = format_render_tier_block(
         RenderTier.GEOMETRY,
@@ -879,7 +925,7 @@ def _test_format_render_tier_block():
         tier2_error="err2",
         coretext_error="CTFontCreateWithURL failed",
     )
-    assert "render_tier=geometry" in geo
+    assert "render=glyph-limited" in geo
     assert "CoreText load failed" in geo
 
 
@@ -887,7 +933,7 @@ def _test_render_glyph_missing_glyph():
     import tools
 
     font = build_mock_font()
-    ctx = tools.ToolContext(font_provider=lambda: font)
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     result = execute_tool(
         "render_glyph",
@@ -898,11 +944,40 @@ def _test_render_glyph_missing_glyph():
     assert "NoSuch" in result, result
 
 
+def _test_transcript_format():
+    from transcript_format import attributed_markdown, thumbnail_size
+
+    assert thumbnail_size(0, 10, 440, 140) == (0, 0)
+    assert thumbnail_size(220, 70, 440, 140) == (220, 70)
+    assert thumbnail_size(880, 280, 440, 140) == (440, 140)
+    tw, th = thumbnail_size(4530, 823, 440, 140)
+    assert tw <= 440 and th <= 140
+    assert tw > 0 and th > 0
+
+    md = attributed_markdown("**bold** and a list:\n\n- one\n- two")
+    if md is None:
+        return
+    plain = str(md.string())
+    assert "**" not in plain, plain
+    assert "bold" in plain
+    assert "one" in plain
+    assert "\n" in plain, plain
+    assert "one" in plain and "two" in plain
+
+    glued = attributed_markdown("**Finding**\n\nKerning is **not consistent**.")
+    if glued is not None:
+        glued_plain = str(glued.string())
+        assert "FindingKerning" not in glued_plain, glued_plain
+        assert "Finding" in glued_plain and "Kerning" in glued_plain
+        assert "\n" in glued_plain, glued_plain
+
+
 def run_smoke():
     """Run all smoke tests that do not require a live Glyphs font."""
     _test_utils_basics()
     _test_parse_provider_response()
     _test_tool_handlers_pure()
+    _test_inspect_mode_rejects_mutations()
     _test_agent_loop_fake()
     _test_render_specimen_diff_unknown_id()
     _test_render_spec_pure()
@@ -927,6 +1002,7 @@ def run_smoke():
     _test_resolve_specimen_lines()
     _test_temporary_export_fixups()
     _test_format_render_tier_block()
+    _test_transcript_format()
     print("Taipo Chat Resources/tests/smoke.py: run_smoke() OK")
 
 

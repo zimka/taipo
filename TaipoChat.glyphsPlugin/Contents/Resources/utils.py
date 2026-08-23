@@ -10,9 +10,48 @@ DEFAULT_MAX_TOKENS = "8192"
 
 MARKER_ISSUE_RECOGNIZED = "ISSUE RECOGNIZED"
 MARKER_ISSUE_NOT_RECOGNIZED = "ISSUE NOT RECOGNIZED"
-MARKER_PLAN_APPROVAL = "PLAN APPROVAL REQUIRED"
 MARKER_DOD_PASSED = "DOD PASSED"
 MARKER_DOD_FAILED = "DOD FAILED"
+
+SESSION_MODE_INSPECT = "inspect"
+SESSION_MODE_EDIT = "edit"
+TOOL_TAG_EDIT_ONLY = "[WORKS IN EDIT MODE ONLY]"
+TOOL_TAG_BOTH_MODES = "[WORKS IN INSPECT AND EDIT MODES]"
+
+_MODE_CONTRACT_INSPECT = (
+    "Current mode: Inspect.\n"
+    "Tools tagged %s will be rejected until the user switches to Edit.\n"
+    "If they want a change, propose a plan and ask them to switch. "
+    "Do not claim you will edit."
+) % TOOL_TAG_EDIT_ONLY
+
+_MODE_CONTRACT_EDIT = (
+    "Current mode: Edit.\n"
+    "Edit-only tools will run. Users often dislike unannounced font changes — "
+    "propose a short plan and ask if they are fine with it before mutating, "
+    "unless they already agreed this plan or asked you to apply it now."
+)
+
+_MODE_NOTICE_INSPECT = "Mode is now Inspect. The font will not be changed."
+_MODE_NOTICE_EDIT = "Mode is now Edit. Mutation tools are available."
+
+
+def normalize_session_mode(mode):
+    if (mode or "").strip().lower() == SESSION_MODE_EDIT:
+        return SESSION_MODE_EDIT
+    return SESSION_MODE_INSPECT
+
+
+def mode_contract_text(session_mode):
+    if normalize_session_mode(session_mode) == SESSION_MODE_EDIT:
+        return _MODE_CONTRACT_EDIT
+    return _MODE_CONTRACT_INSPECT
+
+
+def mode_switch_notice(session_mode):
+    if normalize_session_mode(session_mode) == SESSION_MODE_EDIT:
+        return _MODE_NOTICE_EDIT
+    return _MODE_NOTICE_INSPECT
 
 MAX_AGENT_ITERATIONS = 20
 

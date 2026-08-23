@@ -16,6 +16,14 @@ if _RESOURCES not in sys.path:
 
 from tools.model_toolset import ModelToolSpec, ModelToolset, model_tool
 from provider import _convert_tool_schema
+from utils import TOOL_TAG_BOTH_MODES, TOOL_TAG_EDIT_ONLY
+
+EDIT_ONLY_TOOLS = {
+    "move_nodes",
+    "set_width",
+    "edit_glyph_metadata",
+    "edit_kerning_pairs",
+}
 
 EXPECTED_TOOL_NAMES = [
     "list_masters",
@@ -186,6 +194,58 @@ def _test_render_specimen_mentions_diff():
     assert "reference_render_specimen_id" in by_name["render_specimen_diff"]["input_schema"]["properties"]
 
 
+def _test_static_mode_tags():
+    first = ModelToolset.schemas()
+    second = ModelToolset.schemas()
+    assert first == second
+    by_name = {s["name"]: s for s in first}
+    for name in EDIT_ONLY_TOOLS:
+        assert by_name[name]["description"].startswith(TOOL_TAG_EDIT_ONLY), name
+    for name, schema in by_name.items():
+        if name in EDIT_ONLY_TOOLS:
+            continue
+        assert schema["description"].startswith(TOOL_TAG_BOTH_MODES), name
+
+
+def _test_inspect_execute_rejects_edit_tools():
+    import tools
+    from tests.mock import build_mock_font
+
+    font = build_mock_font()
+    ctx = tools.ToolContext(font_provider=lambda: font, session_mode="inspect")
+    toolset = ModelToolset(ctx)
+    layer = font.glyphs["Dje-cy"].layers["M_BOLD"]
+    before = [(int(n.position.x), int(n.position.y)) for n in layer.paths[0].nodes]
+    out = toolset.execute(
+        "move_nodes",
+        {
+            "glyph": "Dje-cy",
+            "master": "Bold",
+            "path": 0,
+            "nodes": [0],
+            "dx": 10,
+            "dy": 0,
+        },
+    )
+    assert "locked in Inspect mode" in out
+    after = [(int(n.position.x), int(n.position.y)) for n in layer.paths[0].nodes]
+    assert after == before
+
+    ctx.session_mode = "edit"
+    out = toolset.execute(
+        "move_nodes",
+        {
+            "glyph": "Dje-cy",
+            "master": "Bold",
+            "path": 0,
+            "nodes": [0],
+            "dx": 10,
+            "dy": 0,
+        },
+    )
+    assert "Moved" in out
+
+
 def _test_provider_round_trip():
     for schema in ModelToolset.schemas():
         converted = _convert_tool_schema(schema)
@@ -204,6 +264,8 @@ def run_tests():
     _test_schemas_list_expected_tools()
     _test_schemas_have_required_shape()
     _test_render_specimen_mentions_diff()
+    _test_static_mode_tags()
+    _test_inspect_execute_rejects_edit_tools()
     _test_provider_round_trip()
     print("Taipo Chat Resources/tests/test_model_toolset.py: run_tests() OK")
 

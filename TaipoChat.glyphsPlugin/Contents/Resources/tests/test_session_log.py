@@ -69,6 +69,36 @@ def _test_file_gets_debug_ui_gets_warning_only():
             session_log.configure(False)
 
 
+def _test_log_chat_message_writes_user_and_assistant():
+    with tempfile.TemporaryDirectory() as tmp:
+        log_path = os.path.join(tmp, "assets", "last_session.log")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        old_path = session_log.session_log_path
+        session_log.session_log_path = lambda: log_path
+        try:
+            session_log.configure(True)
+            session_log.begin_session({"plugin_version": "0.0-test"})
+            session_log.log_chat_message("user", "Check kerning on A")
+            session_log.log_chat_message(
+                "assistant",
+                "**Finding**\n\nKerning is **not consistent**.",
+            )
+            session_log.log_chat_message("assistant", "")
+            session_log.log_chat_message("user", None)
+            for handler in logging.getLogger("taipo").handlers:
+                if isinstance(handler, logging.FileHandler):
+                    handler.flush()
+            text = open(log_path, encoding="utf-8").read()
+            assert "user:\nCheck kerning on A" in text
+            assert "assistant:\n**Finding**" in text
+            assert "Kerning is **not consistent**." in text
+            assert text.count("user:\n") == 1
+            assert text.count("assistant:\n") == 1
+        finally:
+            session_log.session_log_path = old_path
+            session_log.configure(False)
+
+
 def _test_probe_log_file_writable():
     with tempfile.TemporaryDirectory() as tmp:
         log_path = os.path.join(tmp, "nested", "last_session.log")
@@ -103,6 +133,7 @@ def _test_unwritable_log_skips_file_handler():
 def run_tests():
     _test_configure_off_is_silent()
     _test_file_gets_debug_ui_gets_warning_only()
+    _test_log_chat_message_writes_user_and_assistant()
     _test_probe_log_file_writable()
     _test_unwritable_log_skips_file_handler()
     print("Taipo Chat Resources/tests/test_session_log.py: run_tests() OK")

@@ -24,53 +24,31 @@ _render_logger = get_logger("render")
 
 def _log_export_tiers(tier: RenderTier, tier1_err: str | None, tier2_err: str | None) -> None:
     if tier1_err:
-        _render_logger.warning("Tier 1 export failed: %s", tier1_err)
+        _render_logger.warning("full export failed: %s", tier1_err)
     if tier2_err:
-        _render_logger.warning("Tier 2 export failed: %s", tier2_err)
+        _render_logger.warning("stripped export failed: %s", tier2_err)
     if tier == RenderTier.GEOMETRY and (tier1_err or tier2_err):
-        _render_logger.warning("Using geometry tier (no successful OTF export)")
+        _render_logger.warning("using glyph-limited render (no successful OTF export)")
 
 
 def _log_coretext_fallback(coretext_err: str | None, context: str) -> None:
     if coretext_err:
         _render_logger.warning(
-            "CoreText render failed (%s), falling back to geometry: %s",
+            "CoreText render failed (%s), falling back to glyph-limited: %s",
             context,
             coretext_err,
         )
 
 
 class RenderTier(str, Enum):
-    """Specimen render fidelity tier (best first)."""
+    """Specimen render fidelity (best first)."""
 
-    CORETEXT_FULL = "coretext_full"
-    CORETEXT_NO_FEATURES = "coretext_no_features"
-    GEOMETRY = "geometry"
+    CORETEXT_FULL = "full"
+    CORETEXT_NO_FEATURES = "feature-limited"
+    GEOMETRY = "glyph-limited"
 
 
-RENDER_TIER_LABELS = {
-    RenderTier.CORETEXT_FULL: "Tier 1: coretext_full",
-    RenderTier.CORETEXT_NO_FEATURES: "Tier 2: coretext_no_features",
-    RenderTier.GEOMETRY: "Tier 3: geometry",
-}
-
-RENDER_TIER_RELIABLE = {
-    RenderTier.CORETEXT_FULL: (
-        "glyph outlines, advance widths, multiline layout, pair kerning, "
-        "OpenType features (liga, calt, ccmp, case, stylistic sets, mark positioning)"
-    ),
-    RenderTier.CORETEXT_NO_FEATURES: (
-        "glyph outlines, advance widths, multiline layout, pair kerning (usually); "
-        "precomposed Unicode characters"
-    ),
-    RenderTier.GEOMETRY: (
-        "glyph outlines, advance widths, multiline layout; "
-        "precomposed Unicode characters; shape edits visible in render_specimen_diff"
-    ),
-}
-
-RENDER_TIER_NOT_RELIABLE = {
-    RenderTier.CORETEXT_FULL: "(none — full export succeeded)",
+RENDER_LIMITATIONS = {
     RenderTier.CORETEXT_NO_FEATURES: (
         "ligatures, contextual alternates (calt), ccmp composition, "
         "case features (smcp/c2sc), stylistic sets, localized forms (locl), "
@@ -122,27 +100,25 @@ def format_render_tier_block(
     tier2_error: str | None = None,
     coretext_error: str | None = None,
 ) -> str:
-    """Human-readable tier report for tool result headers (agent-facing)."""
-    lines = [
-        "render_tier=%s" % tier.value,
-        "render_tier_label=%s" % RENDER_TIER_LABELS[tier],
-        "render_tier_reliable_for: %s" % RENDER_TIER_RELIABLE[tier],
-        "render_tier_not_reliable_for: %s" % RENDER_TIER_NOT_RELIABLE[tier],
-    ]
+    """Agent-facing render header: mode, plus limitations when not full."""
+    lines = ["render=%s" % tier.value]
+    limitations = RENDER_LIMITATIONS.get(tier)
+    if limitations:
+        lines.append("render_limitations: %s" % limitations)
     if tier == RenderTier.CORETEXT_NO_FEATURES and tier1_error:
-        lines.append("render_tier_fallback_reason: full export failed (%s)" % tier1_error)
+        lines.append("render_fallback_reason: full export failed (%s)" % tier1_error)
     if tier == RenderTier.GEOMETRY:
         if tier1_error:
             lines.append(
-                "render_tier_fallback_reason: full export failed (%s)" % tier1_error
+                "render_fallback_reason: full export failed (%s)" % tier1_error
             )
         if tier2_error:
             lines.append(
-                "render_tier_fallback_reason_2: stripped export failed (%s)" % tier2_error
+                "render_fallback_reason_2: stripped export failed (%s)" % tier2_error
             )
         if coretext_error:
             lines.append(
-                "render_tier_fallback_reason_3: CoreText load failed (%s)" % coretext_error
+                "render_fallback_reason_3: CoreText load failed (%s)" % coretext_error
             )
     return "\n".join(lines)
 

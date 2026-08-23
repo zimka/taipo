@@ -1,5 +1,5 @@
 # encoding: utf-8
-"""Taipo Chat — agentic Chat Completions API (OpenAI-compatible) with tool use and human-in-the-loop."""
+"""Taipo Chat — agentic Chat Completions API (OpenAI-compatible) with tool use and Inspect/Edit modes."""
 
 import threading
 
@@ -7,30 +7,44 @@ import objc
 from AppKit import (
     NSAlert,
     NSApp,
+    NSAttachmentAttributeName,
     NSAttributedString,
     NSBlockOperation,
     NSColor,
     NSEventModifierFlagShift,
     NSFont,
     NSImage,
+    NSImageScaleNone,
+    NSImageView,
     NSMenuItem,
+    NSScrollView,
+    NSSegmentedControl,
+    NSSegmentStyleRounded,
+    NSSegmentSwitchTrackingSelectOne,
     NSTextAttachment,
+    NSViewHeightSizable,
+    NSViewWidthSizable,
 )
-from Foundation import NSData, NSOperationQueue, NSSelectorFromString, NSSize
+from Foundation import NSData, NSMakeRect, NSOperationQueue, NSSelectorFromString
 from GlyphsApp import Glyphs, WINDOW_MENU
 from GlyphsApp.plugins import GeneralPlugin
-from vanilla import Button, CheckBox, EditText, TextBox, TextEditor, Window
+from vanilla import Button, CheckBox, EditText, Group, TextBox, TextEditor, Window
 
 from tools import DEFAULT_RENDER_CONTRACT, ToolContext
 from tools.model_toolset import ModelToolset
 from _version import __version__ as PLUGIN_VERSION
 from session_log import begin_session, configure as configure_session_log
 from state import ChatState, migration_default_strings
+from transcript_format import attributed_markdown, thumbnail_size
 from utils import (
     DEFAULT_BASE_URL,
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL,
     DEFAULT_SYSTEM_PROMPT,
+    SESSION_MODE_EDIT,
+    SESSION_MODE_INSPECT,
+    mode_switch_notice,
+    normalize_session_mode,
 )
 
 _SETTINGS_TOGGLE_W = 76
@@ -38,6 +52,8 @@ _SETTINGS_ROW_H = 22
 _SETTINGS_ROW_GAP = 6
 _LABEL_ROW_H = 18
 _STATUS_ROW_H = 14
+_MODE_CONTROL_W = 168
+_MODE_CONTROL_H = 22
 _SYSTEM_PROMPT_H = 100
 _SECTION_SEP_H = 1
 _SECTION_SEP_GAP = 10
@@ -50,6 +66,10 @@ _INSERT_NEWLINE_SEL = NSSelectorFromString("insertNewline:")
 
 _TRANSCRIPT_IMAGE_MAX_W = 440
 _TRANSCRIPT_IMAGE_MAX_H = 140
+_PREVIEW_WINDOW_SIZE = (960, 420)
+_PREVIEW_WINDOW_MIN_SIZE = (640, 280)
+_PREVIEW_MIN_MAGNIFICATION = 0.25
+_PREVIEW_MAX_MAGNIFICATION = 8.0
 
 
 def _defaults_key(name):
@@ -139,10 +159,6 @@ def _brief_json(value, limit=180):
     return s
 
 
-def _is_approve_message(text):
-    return (text or "").strip().lower() == "approve"
-
-
 def _set_tooltip(control, message):
     try:
         control.setToolTip(message)
@@ -180,6 +196,7 @@ class TaipoChatPlugin(GeneralPlugin):
                 font_provider=self._font_provider,
                 render_contract=DEFAULT_RENDER_CONTRACT,
                 api_settings=self._state.settings,
+                session_mode=SESSION_MODE_INSPECT,
             )
         )
 
@@ -275,11 +292,8 @@ class TaipoChatPlugin(GeneralPlugin):
             checksSpelling=True,
         )
 
-        self.w.modeLabel = TextBox(
-            (12, 0, 185, _STATUS_ROW_H),
-            "Mode: Planning",
-            sizeStyle="small",
-        )
+        self.w.modeControl = Group((12, 0, _MODE_CONTROL_W, _MODE_CONTROL_H))
+        self._install_mode_segment()
         self.w.tokenLabel = TextBox(
             (205, 0, -12, _STATUS_ROW_H),
             self._state.usage_caption(),
@@ -287,7 +301,7 @@ class TaipoChatPlugin(GeneralPlugin):
         )
         self.w.statusDetail = TextBox(
             (12, 0, -12, 28),
-            "Ready. Describe a fix, then Send.",
+            "Inspecting only. The font will not change.",
             sizeStyle="small",
         )
 
@@ -297,11 +311,6 @@ class TaipoChatPlugin(GeneralPlugin):
             callback=self._on_primary_,
         )
         self.w.primaryButton.bind("\r", ["command"])
-        self.w.approveButton = Button(
-            (108, 0, 100, 22),
-            "Approve plan",
-            callback=self._on_approve_plan_,
-        )
 
         self.w.versionLabel = TextBox(
             (12, -20, -12, 14),
@@ -334,10 +343,6 @@ class TaipoChatPlugin(GeneralPlugin):
         )
         _set_tooltip(self.w.primaryButton, "Send your message to the assistant.")
         _set_tooltip(
-            self.w.approveButton,
-            "Authorize the pending plan. You can also type Approve alone.",
-        )
-        _set_tooltip(
             self.w.showToolResults,
             "When on, shows tool inputs/outputs, turn-finished markers, and full error detail. "
             "Specimen and diff images always appear.",
@@ -348,8 +353,99 @@ class TaipoChatPlugin(GeneralPlugin):
         _in_tv = self.w.inputField.getNSTextView()
         if _in_tv is not None:
             _in_tv.setDelegate_(self)
+        _tr_tv = self._transcript_text_view()
+        if _tr_tv is not None:
+            _tr_tv.setDelegate_(self)
 
         self._layout_settings_strip()
+
+    @objc.python_method
+    def _install_mode_segment(self):
+        seg = NSSegmentedControl.alloc().initWithFrame_(
+            NSMakeRect(0, 0, _MODE_CONTROL_W, _MODE_CONTROL_H)
+        )
+        seg.setSegmentCount_(2)
+        seg.setLabel_forSegment_("Inspect", 0)
+        seg.setLabel_forSegment_("Edit", 1)
+        seg.setSelectedSegment_(0)
+        try:
+            seg.setSegmentStyle_(NSSegmentStyleRounded)
+        except Exception:
+            pass
+        try:
+            seg.setTrackingMode_(NSSegmentSwitchTrackingSelectOne)
+        except Exception:
+            pass
+        try:
+            seg.setToolTip_forSegment_(
+                "Read and compare only. The font will not change.",
+                0,
+            )
+            seg.setToolTip_forSegment_(
+                "Editing tools on. Taipo can change the font; "
+                "it should still ask before applying a plan.",
+                1,
+            )
+        except Exception:
+            pass
+        self._apply_mode_segment_color(seg, SESSION_MODE_INSPECT)
+        seg.setTarget_(self)
+        seg.setAction_("modeSegmentChanged:")
+        try:
+            self.w.modeControl.getNSView().addSubview_(seg)
+        except Exception:
+            pass
+        self._mode_segment = seg
+
+    @objc.python_method
+    def _apply_mode_segment_color(self, seg, mode):
+        if seg is None:
+            return
+        try:
+            if normalize_session_mode(mode) == SESSION_MODE_EDIT:
+                color = NSColor.systemOrangeColor()
+            else:
+                color = NSColor.systemGreenColor()
+            seg.setSelectedSegmentBezelColor_(color)
+        except Exception:
+            pass
+
+    @objc.python_method
+    def _layout_mode_segment(self):
+        seg = getattr(self, "_mode_segment", None)
+        if seg is None:
+            return
+        try:
+            seg.setFrame_(NSMakeRect(0, 0, _MODE_CONTROL_W, _MODE_CONTROL_H))
+        except Exception:
+            pass
+
+    @objc.python_method
+    def _set_session_mode(self, mode):
+        mode = normalize_session_mode(mode)
+        self._session_mode = mode
+        try:
+            self._toolset.ctx.session_mode = mode
+        except Exception:
+            pass
+        seg = getattr(self, "_mode_segment", None)
+        if seg is not None:
+            try:
+                seg.setSelectedSegment_(0 if mode == SESSION_MODE_INSPECT else 1)
+            except Exception:
+                pass
+            self._apply_mode_segment_color(seg, mode)
+        self._refresh_control_ui()
+
+    def modeSegmentChanged_(self, sender):
+        selected = 0
+        try:
+            selected = int(sender.selectedSegment())
+        except Exception:
+            selected = 0
+        self._set_session_mode(
+            SESSION_MODE_INSPECT if selected == 0 else SESSION_MODE_EDIT
+        )
 
     @objc.python_method
     def settings(self):
@@ -366,14 +462,17 @@ class TaipoChatPlugin(GeneralPlugin):
         self._toolset = self._build_toolset()
         self._cancel_event = None
         self._worker_busy = False
-        self._plan_pending = False
-        self._editing_mode = False
-        self._edits_applied = False
+        self._session_mode = SESSION_MODE_INSPECT
+        self._mode_announced = SESSION_MODE_INSPECT
+        self._mode_segment = None
         self._status_override = None
         self._settings_expanded = False
         self._debug_info = _show_tool_results_from_default(
             _get_default("debugInfo", "1")
         )
+        self._preview = None
+        self._preview_scroll = None
+        self._preview_image_view = None
         self._build_window()
         self._refresh_setup_ui()
         self._refresh_control_ui()
@@ -564,13 +663,15 @@ class TaipoChatPlugin(GeneralPlugin):
         y += _LABEL_ROW_H + _SETTINGS_ROW_GAP
         self.w.inputField.setPosSize((12, y, -12, 72))
         y += 80
-        self.w.modeLabel.setPosSize((12, y, 185, _STATUS_ROW_H))
-        self.w.tokenLabel.setPosSize((205, y, -12, _STATUS_ROW_H))
-        y += 18
+        self.w.modeControl.setPosSize((12, y, _MODE_CONTROL_W, _MODE_CONTROL_H))
+        self._layout_mode_segment()
+        self.w.tokenLabel.setPosSize(
+            (12 + _MODE_CONTROL_W + 12, y + 4, -12, _STATUS_ROW_H)
+        )
+        y += _MODE_CONTROL_H + 6
         self.w.statusDetail.setPosSize((12, y, -12, 28))
         y += 32
         self.w.primaryButton.setPosSize((12, y, 88, 22))
-        self.w.approveButton.setPosSize((108, y, 100, 22))
 
     @objc.python_method
     def _sync_settings_controls_from_state(self):
@@ -624,6 +725,25 @@ class TaipoChatPlugin(GeneralPlugin):
             return False
         return self._handle_input_insert_newline()
 
+    def textView_clickedOnCell_inRect_atIndex_(self, textView, cell, rect, index):
+        try:
+            transcript = self._transcript_text_view()
+        except Exception:
+            transcript = None
+        if transcript is None or textView != transcript:
+            return
+        storage = textView.textStorage()
+        if storage is None or index < 0 or index >= storage.length():
+            return
+        attachment = storage.attribute_atIndex_effectiveRange_(
+            NSAttachmentAttributeName, index, None
+        )
+        if attachment is None:
+            return
+        img = attachment.image()
+        if img is not None:
+            self._show_image_preview(img)
+
     def textDidChange_(self, notification):
         self._refresh_control_ui()
 
@@ -666,22 +786,16 @@ class TaipoChatPlugin(GeneralPlugin):
         if self._status_override:
             return self._status_override
         if self._worker_busy:
-            if self._editing_mode:
-                return "Applying approved plan…"
             return "Assistant is working…"
-        if self._plan_pending:
-            return "Plan ready — review above, then Approve plan or reply to revise."
-        if self._edits_applied:
-            return "Edits applied. Check the red/green diff above."
-        return "Ready. Describe a fix, then Send."
+        if self._session_mode == SESSION_MODE_EDIT:
+            return "Edit is on. Taipo can change the font after you agree a plan."
+        return "Inspecting only. The font will not change."
 
     @objc.python_method
     def _refresh_control_ui(self):
         if not getattr(self, "w", None):
             return
 
-        mode = "Editing" if self._editing_mode and self._worker_busy else "Planning"
-        self.w.modeLabel.set("Mode: %s" % mode)
         self.w.tokenLabel.set(self._state.usage_caption())
         self.w.statusDetail.set(self._default_status_detail())
 
@@ -693,7 +807,12 @@ class TaipoChatPlugin(GeneralPlugin):
             self._set_primary_button("Send", has_text)
             _set_tooltip(self.w.primaryButton, "Send your message to the assistant.")
 
-        self.w.approveButton.enable(self._plan_pending and not self._worker_busy)
+        seg = getattr(self, "_mode_segment", None)
+        if seg is not None:
+            try:
+                seg.setEnabled_(not self._worker_busy)
+            except Exception:
+                pass
 
         try:
             self.w.inputField.enable(not self._worker_busy)
@@ -729,7 +848,7 @@ class TaipoChatPlugin(GeneralPlugin):
         tv.textStorage().appendAttributedString_(attr_str)
 
     @objc.python_method
-    def _append_role_line(self, role_label, body, label_color):
+    def _append_role_line(self, role_label, body, label_color, markdown=False):
         """Append ``role_label: body`` with a colored role prefix and default body color."""
         tv = self._transcript_text_view()
         if tv is None:
@@ -746,11 +865,19 @@ class TaipoChatPlugin(GeneralPlugin):
                 "%s: " % role_label, prefix_attrs
             )
         )
-        storage.appendAttributedString_(
-            NSAttributedString.alloc().initWithString_attributes_(
-                "%s\n" % (body or ""), body_attrs
+        body_text = body or ""
+        md = attributed_markdown(body_text) if markdown else None
+        if md is not None:
+            storage.appendAttributedString_(md)
+            storage.appendAttributedString_(
+                NSAttributedString.alloc().initWithString_attributes_("\n", body_attrs)
             )
-        )
+        else:
+            storage.appendAttributedString_(
+                NSAttributedString.alloc().initWithString_attributes_(
+                    "%s\n" % body_text, body_attrs
+                )
+            )
 
     @objc.python_method
     def _append_image(self, png_bytes):
@@ -763,14 +890,63 @@ class TaipoChatPlugin(GeneralPlugin):
             return
         sz = img.size()
         w, h = float(sz.width), float(sz.height)
-        if w > 0 and h > 0:
-            scale = min(_TRANSCRIPT_IMAGE_MAX_W / w, _TRANSCRIPT_IMAGE_MAX_H / h, 1.0)
-            img.setSize_(NSSize(int(w * scale), int(h * scale)))
+        thumb_w, thumb_h = thumbnail_size(
+            w, h, _TRANSCRIPT_IMAGE_MAX_W, _TRANSCRIPT_IMAGE_MAX_H
+        )
         attachment = NSTextAttachment.alloc().init()
         attachment.setImage_(img)
+        if thumb_w > 0 and thumb_h > 0:
+            attachment.setBounds_(NSMakeRect(0, 0, thumb_w, thumb_h))
         attr = NSAttributedString.attributedStringWithAttachment_(attachment)
         tv.textStorage().appendAttributedString_(attr)
         self._append_plain_text("\n")
+
+    @objc.python_method
+    def _ensure_preview_window(self):
+        preview = getattr(self, "_preview", None)
+        if preview is not None and getattr(preview, "_window", None) is not None:
+            return
+        self._preview = Window(
+            _PREVIEW_WINDOW_SIZE,
+            "Specimen",
+            minSize=_PREVIEW_WINDOW_MIN_SIZE,
+        )
+        self._preview.body = Group((0, 0, -0, -0))
+        scroll = NSScrollView.alloc().init()
+        scroll.setHasHorizontalScroller_(True)
+        scroll.setHasVerticalScroller_(True)
+        scroll.setAutohidesScrollers_(False)
+        scroll.setAllowsMagnification_(True)
+        scroll.setMinMagnification_(_PREVIEW_MIN_MAGNIFICATION)
+        scroll.setMaxMagnification_(_PREVIEW_MAX_MAGNIFICATION)
+        scroll.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
+        image_view = NSImageView.alloc().init()
+        image_view.setImageScaling_(NSImageScaleNone)
+        scroll.setDocumentView_(image_view)
+        host = self._preview.body.getNSView()
+        scroll.setFrame_(host.bounds())
+        host.addSubview_(scroll)
+        self._preview_scroll = scroll
+        self._preview_image_view = image_view
+
+    @objc.python_method
+    def _show_image_preview(self, image):
+        if image is None:
+            return
+        self._ensure_preview_window()
+        iv = self._preview_image_view
+        scroll = self._preview_scroll
+        iv.setImage_(image)
+        sz = image.size()
+        w, h = float(sz.width), float(sz.height)
+        if w <= 0 or h <= 0:
+            return
+        iv.setFrame_(NSMakeRect(0, 0, w, h))
+        scroll.setMagnification_(1.0)
+        self._preview.open()
+        ns_win = self._preview.getNSWindow()
+        if ns_win is not None:
+            ns_win.makeKeyAndOrderFront_(None)
 
     @objc.python_method
     def _scroll_to_end(self):
@@ -784,7 +960,6 @@ class TaipoChatPlugin(GeneralPlugin):
     def _set_busy(self, busy):
         self._worker_busy = busy
         if not busy:
-            self._editing_mode = False
             self._status_override = None
         self._refresh_control_ui()
 
@@ -806,6 +981,7 @@ class TaipoChatPlugin(GeneralPlugin):
                     "Assistant",
                     text,
                     NSColor.systemPurpleColor(),
+                    markdown=True,
                 )
         elif kind == "tool_use":
             line = "[tool_use] %s(%s)\n" % (
@@ -843,28 +1019,22 @@ class TaipoChatPlugin(GeneralPlugin):
                                 raw = b""
                             if raw:
                                 self._append_image(raw)
-        elif kind == "approval_required":
-            self._plan_pending = True
-            self._refresh_control_ui()
         elif kind == "usage_updated":
             self.w.tokenLabel.set(self._state.usage_caption())
         elif kind == "done":
             if self._debug_info:
                 reason = event.get("stop_reason") or "end_turn"
                 self._append_plain_text("\n[turn finished: %s]\n\n" % reason)
-            self._plan_pending = False
             self._refresh_control_ui()
         elif kind == "iteration_limit":
             self._append_plain_text(
                 "\n[iteration limit reached]\n\n",
                 color=NSColor.systemOrangeColor(),
             )
-            self._plan_pending = False
             self._status_override = "Iteration limit reached."
             self._refresh_control_ui()
         elif kind == "cancelled":
             self._append_plain_text("\n[cancelled by user]\n\n", color=NSColor.systemOrangeColor())
-            self._plan_pending = False
             self._status_override = "Cancelled."
             self._refresh_control_ui()
         elif kind == "error":
@@ -872,7 +1042,6 @@ class TaipoChatPlugin(GeneralPlugin):
                 "\n[error] %s\n\n" % (event.get("text") or ""),
                 color=NSColor.systemRedColor(),
             )
-            self._plan_pending = False
             err = (event.get("text") or "").strip()
             self._status_override = err[:120] if err else "Error."
             self._refresh_control_ui()
@@ -889,6 +1058,7 @@ class TaipoChatPlugin(GeneralPlugin):
     def _tool_executor(self, name, args):
         def run():
             self._toolset._ctx.debug_info = self._debug_info
+            self._toolset._ctx.session_mode = self._session_mode
             return self._toolset.execute(name, args)
 
         return _run_on_main_sync(run)
@@ -902,9 +1072,12 @@ class TaipoChatPlugin(GeneralPlugin):
         if err:
             _show_alert("Taipo Chat", err)
             return
-        if _is_approve_message(user_text):
-            self._editing_mode = True
-            self._edits_applied = True
+        if user_text and self._session_mode != self._mode_announced:
+            user_text = "%s\n\n%s" % (
+                mode_switch_notice(self._session_mode),
+                user_text,
+            )
+            self._mode_announced = self._session_mode
         self._status_override = None
         self._cancel_event = threading.Event()
         self._set_busy(True)
@@ -917,6 +1090,7 @@ class TaipoChatPlugin(GeneralPlugin):
                     tool_schemas=ModelToolset.schemas(),
                     on_event=self._dispatch_event,
                     cancel_event=self._cancel_event,
+                    session_mode=self._session_mode,
                 )
             except Exception as e:
                 from session_log import get_logger
@@ -947,13 +1121,6 @@ class TaipoChatPlugin(GeneralPlugin):
         self._start_turn(text)
 
     @objc.python_method
-    def _on_approve_plan_(self, sender):
-        if self._worker_busy or not self._plan_pending:
-            return
-        self.w.inputField.set("")
-        self._start_turn("Approve")
-
-    @objc.python_method
     def _on_cancel_(self, sender):
         if self._cancel_event is not None:
             self._cancel_event.set()
@@ -970,9 +1137,8 @@ class TaipoChatPlugin(GeneralPlugin):
             tv.textStorage().setAttributedString_(NSAttributedString.alloc().initWithString_(""))
         self._state.reset_system_prompt_to_default()
         self.w.inputField.set("")
-        self._plan_pending = False
-        self._editing_mode = False
-        self._edits_applied = False
+        self._mode_announced = SESSION_MODE_INSPECT
+        self._set_session_mode(SESSION_MODE_INSPECT)
         self._status_override = None
         registry = getattr(self._toolset.ctx, "render_registry", None)
         if registry is not None:

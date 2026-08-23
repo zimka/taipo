@@ -28,7 +28,7 @@ from tests.mock import (
 def _ctx(font):
     import tools
 
-    return tools.ToolContext(font_provider=lambda: font)
+    return tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
 
 def _test_tool_handlers_pure():
@@ -172,7 +172,7 @@ def _test_render_specimen_diff_tier_mismatch():
         )
         assert isinstance(out, str), out
         assert "overlay skipped" in out, out
-        assert "current_tier=geometry" in out, out
+        assert "current_render=glyph-limited" in out, out
 
 
 def _test_numeric_judge_new_helpers():

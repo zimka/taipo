@@ -13,7 +13,7 @@ def stub_render_with_spec_deps(tiers=None):
     """Stub raster + overlay so smoke tests run without PyObjC.
 
     *tiers* is an optional list of ``RenderTier`` values popped per
-    ``render_with_spec`` call (defaults to ``coretext_full``).
+    ``render_with_spec`` call (defaults to ``full``).
     """
     import tools.render as render_mod
 
