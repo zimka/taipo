@@ -703,7 +703,7 @@ def apply_glyph_metadata(glyph, changes: dict[str, Any], font, master=None) -> s
     )
 
 
-def handle_get_glyph_metadata(args, ctx, font):
+def handle_read_glyph_metadata(args, ctx, font):
     name = str(args.get("glyph") or "").strip()
     if not name:
         return "[error] 'glyph' is required."

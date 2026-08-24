@@ -1,5 +1,5 @@
 # encoding: utf-8
-"""AppKit-free stubs for render_specimen / render_specimen_diff smoke tests."""
+"""AppKit-free stubs for render_specimen / compare_specimen smoke tests."""
 
 from contextlib import contextmanager
 

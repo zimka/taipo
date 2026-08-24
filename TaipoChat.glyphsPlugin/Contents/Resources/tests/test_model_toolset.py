@@ -19,8 +19,8 @@ from provider import _convert_tool_schema
 from utils import TOOL_TAG_BOTH_MODES, TOOL_TAG_EDIT_ONLY
 
 EDIT_ONLY_TOOLS = {
-    "move_nodes",
-    "set_width",
+    "edit_nodes",
+    "edit_width",
     "edit_glyph_metadata",
     "edit_kerning_pairs",
 }
@@ -28,18 +28,18 @@ EDIT_ONLY_TOOLS = {
 EXPECTED_TOOL_NAMES = [
     "list_masters",
     "list_glyphs",
-    "get_glyph",
-    "get_glyph_metadata",
+    "read_glyph",
+    "read_glyph_metadata",
     "edit_glyph_metadata",
     "read_kerning_pairs",
     "edit_kerning_pairs",
     "find_kerning_rules",
     "render_specimen",
     "render_glyph",
-    "numeric_judge",
-    "move_nodes",
-    "set_width",
-    "render_specimen_diff",
+    "measure_geometry",
+    "edit_nodes",
+    "edit_width",
+    "compare_specimen",
 ]
 
 
@@ -190,8 +190,8 @@ def _test_render_specimen_mentions_diff():
     by_name = {s["name"]: s for s in ModelToolset.schemas()}
     desc = by_name["render_specimen"]["description"]
     assert "render_specimen_id" in desc
-    assert "render_specimen_diff" in desc
-    assert "reference_render_specimen_id" in by_name["render_specimen_diff"]["input_schema"]["properties"]
+    assert "compare_specimen" in desc
+    assert "reference_specimen_id" in by_name["compare_specimen"]["input_schema"]["properties"]
 
 
 def _test_static_mode_tags():
@@ -217,7 +217,7 @@ def _test_inspect_execute_rejects_edit_tools():
     layer = font.glyphs["Dje-cy"].layers["M_BOLD"]
     before = [(int(n.position.x), int(n.position.y)) for n in layer.paths[0].nodes]
     out = toolset.execute(
-        "move_nodes",
+        "edit_nodes",
         {
             "glyph": "Dje-cy",
             "master": "Bold",
@@ -233,7 +233,7 @@ def _test_inspect_execute_rejects_edit_tools():
 
     ctx.session_mode = "edit"
     out = toolset.execute(
-        "move_nodes",
+        "edit_nodes",
         {
             "glyph": "Dje-cy",
             "master": "Bold",

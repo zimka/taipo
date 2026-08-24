@@ -47,7 +47,7 @@ def _test_tool_handlers_pure():
     out = toolset.execute("list_glyphs", {"filter": "0402"})
     assert "Dje-cy" in out
 
-    out = toolset.execute("get_glyph", {"name": "Dje-cy", "master": "Bold"})
+    out = toolset.execute("read_glyph", {"name": "Dje-cy", "master": "Bold"})
     assert "glyph: Dje-cy" in out
     assert "master: Bold" in out
     assert "paths: 1" in out
@@ -55,7 +55,7 @@ def _test_tool_handlers_pure():
     assert "x=100 y=1420" in out
 
     out = toolset.execute(
-        "move_nodes",
+        "edit_nodes",
         {
             "glyph": "Dje-cy",
             "master": "Bold",
@@ -71,7 +71,7 @@ def _test_tool_handlers_pure():
     assert ys == [1158, 1158, 1420, 1420], ys
 
     out = toolset.execute(
-        "move_nodes",
+        "edit_nodes",
         {
             "glyph": "Dje-cy",
             "master": "Bold",
@@ -84,7 +84,7 @@ def _test_tool_handlers_pure():
     assert out.startswith("[error]")
 
     out = toolset.execute(
-        "move_nodes",
+        "edit_nodes",
         {
             "glyph": "Dje-cy",
             "master": "Bold",
@@ -96,7 +96,7 @@ def _test_tool_handlers_pure():
     )
     assert out.startswith("[error]")
 
-    out = toolset.execute("get_glyph", {"name": "Missing"})
+    out = toolset.execute("read_glyph", {"name": "Missing"})
     assert out.startswith("[error]")
 
     out = toolset.execute("unknown_tool", {})
@@ -106,7 +106,7 @@ def _test_tool_handlers_pure():
 def _test_render_specimen_diff_unknown_id():
     font = build_mock_font()
     toolset = ModelToolset(_ctx(font))
-    out = toolset.execute("render_specimen_diff", {"reference_render_specimen_id": 1})
+    out = toolset.execute("compare_specimen", {"reference_specimen_id": 1})
     assert out.startswith("[error]") and "render_specimen_id" in out.lower(), out
 
 
@@ -126,7 +126,7 @@ def _assert_render_specimen_diff_ok(out, *, reference_id, master="Bold"):
     assert isinstance(out, list) and len(out) == 2, out
     header, png_bytes = out
     assert isinstance(header, str), type(header)
-    assert header.startswith("render_specimen_diff"), header
+    assert header.startswith("compare_specimen"), header
     assert "reference_id=%d" % reference_id in header, header
     assert master in header, header
     assert isinstance(png_bytes, bytes), type(png_bytes)
@@ -139,19 +139,19 @@ def _test_render_specimen_diff_sequential():
     font = build_mock_font()
     toolset = ModelToolset(_ctx(font))
 
-    out = toolset.execute("render_specimen_diff", {"reference_render_specimen_id": 1})
+    out = toolset.execute("compare_specimen", {"reference_specimen_id": 1})
     assert out.startswith("[error]"), out
 
     with stub_render_with_spec_deps():
         out = toolset.execute("render_specimen", {"text": "Ђ", "master": "Bold"})
         rid = _assert_render_specimen_ok(out)
         out = toolset.execute(
-            "render_specimen_diff", {"reference_render_specimen_id": rid}
+            "compare_specimen", {"reference_specimen_id": rid}
         )
         _assert_render_specimen_diff_ok(out, reference_id=rid)
 
         out = toolset.execute(
-            "render_specimen_diff", {"reference_render_specimen_id": 99}
+            "compare_specimen", {"reference_specimen_id": 99}
         )
         assert isinstance(out, str) and out.startswith("[error]"), out
 
@@ -168,7 +168,7 @@ def _test_render_specimen_diff_tier_mismatch():
         out = toolset.execute("render_specimen", {"text": "Ђ", "master": "Bold"})
         rid = _assert_render_specimen_ok(out)
         out = toolset.execute(
-            "render_specimen_diff", {"reference_render_specimen_id": rid}
+            "compare_specimen", {"reference_specimen_id": rid}
         )
         assert isinstance(out, str), out
         assert "overlay skipped" in out, out
@@ -206,7 +206,7 @@ print('tp_x:', round(tp['x'], 1))
 print('tp_y:', round(tp['y'], 1))
 """
     result = toolset.execute(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["Dje-cy"], "master": "Bold", "code": code},
     )
     assert "angle_ab: 0.0" in result, result
@@ -231,7 +231,7 @@ def _test_numeric_judge_basic():
         "print('x_range:', bb['x1'] - bb['x0'])\n"
     )
     result = toolset.execute(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["Dje-cy"], "master": "Bold", "code": code},
     )
     assert "nodes: 4" in result, result
@@ -248,7 +248,7 @@ def _test_numeric_judge_dist_and_area():
         "print('area:', int(area(p0)))\n"
     )
     result = toolset.execute(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["Dje-cy"], "master": "Bold", "code": code},
     )
     assert "horiz: 700" in result, result
@@ -264,7 +264,7 @@ def _test_numeric_judge_runtime_error():
         "x = g['Dje-cy'][99][0]['x']\n"
     )
     result = toolset.execute(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["Dje-cy"], "master": "Bold", "code": code},
     )
     assert "before" in result, result
@@ -277,7 +277,7 @@ def _test_numeric_judge_missing_glyph():
     toolset = ModelToolset(_ctx(font))
 
     result = toolset.execute(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["NoSuchGlyph"], "code": "print('hi')"},
     )
     assert result.startswith("[error]"), result
@@ -289,7 +289,7 @@ def _test_numeric_judge_no_output_message():
     toolset = ModelToolset(_ctx(font))
 
     result = toolset.execute(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["Dje-cy"], "code": "x = 1 + 1"},
     )
     assert "no output" in result.lower(), result
@@ -304,7 +304,7 @@ def _test_numeric_judge_no_mutations():
     original_x = float(layer_bold.paths[0].nodes[0].position.x)
 
     toolset.execute(
-        "numeric_judge",
+        "measure_geometry",
         {
             "glyphs": ["Dje-cy"],
             "master": "Bold",
@@ -319,13 +319,13 @@ def _test_get_glyph_component_transform():
     font = build_composite_mock_font()
     toolset = ModelToolset(_ctx(font))
 
-    out = toolset.execute("get_glyph", {"name": "Composite-cy", "master": "Regular"})
+    out = toolset.execute("read_glyph", {"name": "Composite-cy", "master": "Regular"})
     assert "components: 1" in out, out
     assert "Dje-cy" in out, out
     assert "offset=" in out or "identity" in out or "mirror" in out or "matrix=" in out, out
     assert "used as component in: (none)" in out, out
 
-    out2 = toolset.execute("get_glyph", {"name": "Dje-cy", "master": "Bold"})
+    out2 = toolset.execute("read_glyph", {"name": "Dje-cy", "master": "Bold"})
     assert "used as component in (1): Composite-cy" in out2, out2
 
 
@@ -340,7 +340,7 @@ def _test_numeric_judge_composite_transform():
         "print('y0:', p0[0]['y'])\n"
     )
     result = toolset.execute(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["Composite-cy"], "master": "Regular", "code": code},
     )
     assert "component: Dje-cy" in result, result
@@ -361,7 +361,7 @@ def _test_numeric_judge_composite_mirror():
         "print('x0:', p0[0]['x'])\n"
     )
     result = toolset.execute(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["Mirrored-cy"], "master": "Regular", "code": code},
     )
     assert "x0: 900" in result, result
@@ -371,7 +371,7 @@ def _test_get_glyph_no_component_uses():
     font = build_mock_font()
     toolset = ModelToolset(_ctx(font))
 
-    out = toolset.execute("get_glyph", {"name": "Dje-cy", "master": "Bold"})
+    out = toolset.execute("read_glyph", {"name": "Dje-cy", "master": "Bold"})
     assert "used as component in: (none)" in out, out
 
 

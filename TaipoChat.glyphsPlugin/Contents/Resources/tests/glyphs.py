@@ -193,7 +193,7 @@ def _test_get_glyph_anchors():
     with _TaipoTestFixture(font) as (glyph, master, layer):
         ctx = _tool_context(font)
         out = execute_tool(
-            "get_glyph",
+            "read_glyph",
             {"name": glyph.name, "master": master.name},
             ctx,
         )
@@ -221,11 +221,11 @@ def _test_render_specimen_diff():
     assert isinstance(png_bytes, bytes) and png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
 
     out = execute_tool(
-        "render_specimen_diff", {"reference_render_specimen_id": 1}, ctx
+        "compare_specimen", {"reference_specimen_id": 1}, ctx
     )
     assert isinstance(out, list) and len(out) == 2, out
     diff_header, diff_png = out
-    assert diff_header.startswith("render_specimen_diff"), diff_header
+    assert diff_header.startswith("compare_specimen"), diff_header
     assert "reference_id=1" in diff_header, diff_header
     assert isinstance(diff_png, bytes) and diff_png[:8] == b"\x89PNG\r\n\x1a\n"
 
@@ -240,7 +240,7 @@ def _test_render_specimen_diff():
     try:
         layer.width = old_width + 200
         out = execute_tool(
-            "render_specimen_diff", {"reference_render_specimen_id": 1}, ctx
+            "compare_specimen", {"reference_specimen_id": 1}, ctx
         )
         assert isinstance(out, list) and len(out) == 2, out
         assert "canvas=" in out[0], out[0]

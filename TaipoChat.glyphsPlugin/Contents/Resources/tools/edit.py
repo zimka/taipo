@@ -5,7 +5,7 @@ from tools.formatting import int_or_none
 from tools.geometry import point
 
 # encoding: utf-8
-def handle_move_nodes(args, ctx, font):
+def handle_edit_nodes(args, ctx, font):
     name = str(args.get("glyph") or "").strip()
     if not name:
         return "[error] 'glyph' is required."
@@ -76,7 +76,7 @@ def handle_move_nodes(args, ctx, font):
         lines.append("  node[%d] (%d,%d) -> (%d,%d)" % (ni, ox, oy, nx, ny))
     return "\n".join(lines)
 
-def handle_set_width(args, ctx, font):
+def handle_edit_width(args, ctx, font):
     name = str(args.get("glyph") or "").strip()
     if not name:
         return "[error] 'glyph' is required."
@@ -101,4 +101,4 @@ def handle_set_width(args, ctx, font):
 
     old_width = int(round(float(layer.width)))
     layer.width = width
-    return "set_width %s@%s: %d -> %d" % (name, master.name, old_width, width)
+    return "edit_width %s@%s: %d -> %d" % (name, master.name, old_width, width)

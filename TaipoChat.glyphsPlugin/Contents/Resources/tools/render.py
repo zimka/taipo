@@ -54,12 +54,12 @@ def handle_render_specimen(args, ctx, font):
     return [header, result.png_bytes]
 
 
-def handle_render_specimen_diff(args, ctx, font):
-    raw_id = args.get("reference_render_specimen_id")
+def handle_compare_specimen(args, ctx, font):
+    raw_id = args.get("reference_specimen_id")
     try:
         rid = int(raw_id)
     except (TypeError, ValueError):
-        return "[error] 'reference_render_specimen_id' must be an integer."
+        return "[error] 'reference_specimen_id' must be an integer."
 
     record = ctx.render_registry.get(rid)
     if record is None:
@@ -80,7 +80,7 @@ def handle_render_specimen_diff(args, ctx, font):
         lines = list(spec.lines)
         specimen_label = lines[0] if len(lines) == 1 else "%d lines" % len(lines)
         msg = [
-            "render_specimen_diff overlay skipped — sides are not comparable.",
+            "compare_specimen overlay skipped — sides are not comparable.",
             "reference_id=%d" % rid,
             "reference_render=%s current_render=%s"
             % (record.tier.value, result.tier.value),
@@ -125,7 +125,7 @@ def handle_render_specimen_diff(args, ctx, font):
     lines = list(spec.lines)
     specimen_label = lines[0] if len(lines) == 1 else "%d lines" % len(lines)
     header = (
-        "render_specimen_diff reference_id=%d master=%s size=%s lines=%r canvas=%dx%d"
+        "compare_specimen reference_id=%d master=%s size=%s lines=%r canvas=%dx%d"
         % (rid, master.name, int(spec.em_px), specimen_label, target_w, target_h)
     )
     header += "\nreference_render=%s current_render=%s" % (
@@ -427,7 +427,7 @@ def tight_canvas_contract(font, master, text, contract):
     """Return a copy of *contract* with canvas_w/canvas_h/margin_x derived from glyph advances.
 
     Mirrors the tight-crop logic in ``render_layer_run`` so other renderers
-    (e.g. render_specimen_diff) can reuse the same sizing before allocating bitmaps.
+    (e.g. compare_specimen) can reuse the same sizing before allocating bitmaps.
     """
     text_w_px = compute_text_advance_px(font, master, text, contract)
     em_px = float(contract.get("em_px", 160.0))

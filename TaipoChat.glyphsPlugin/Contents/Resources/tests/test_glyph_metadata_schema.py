@@ -18,7 +18,7 @@ if _RESOURCES not in sys.path:
 from tools.glyph_metadata import (
     apply_glyph_metadata,
     dump_glyph_metadata,
-    handle_get_glyph_metadata,
+    handle_read_glyph_metadata,
     json_schema_from_dataclass,
     metadata_json_schema,
     writable_field_names,
@@ -239,7 +239,7 @@ def _test_spacing_with_master():
     font.masters = [m]
     font.glyphs = _MockGlyphsList([glyph])
 
-    out = handle_get_glyph_metadata({"glyph": "A", "master": "Regular"}, None, font)
+    out = handle_read_glyph_metadata({"glyph": "A", "master": "Regular"}, None, font)
     payload = json.loads(out)
     assert payload["spacing"]["width"] == 712
     assert payload["spacing"]["lsb"] == 28

@@ -151,7 +151,7 @@ def _test_tool_handlers_pure():
     assert "Dje-cy" in out
 
     out = execute_tool(
-        "get_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx
+        "read_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx
     )
     assert "glyph: Dje-cy" in out
     assert "master: Bold" in out
@@ -160,7 +160,7 @@ def _test_tool_handlers_pure():
     assert "x=100 y=1420" in out
 
     out = execute_tool(
-        "move_nodes",
+        "edit_nodes",
         {
             "glyph": "Dje-cy",
             "master": "Bold",
@@ -177,7 +177,7 @@ def _test_tool_handlers_pure():
     assert ys == [1158, 1158, 1420, 1420], ys
 
     out = execute_tool(
-        "move_nodes",
+        "edit_nodes",
         {
             "glyph": "Dje-cy",
             "master": "Bold",
@@ -191,7 +191,7 @@ def _test_tool_handlers_pure():
     assert out.startswith("[error]")
 
     out = execute_tool(
-        "move_nodes",
+        "edit_nodes",
         {
             "glyph": "Dje-cy",
             "master": "Bold",
@@ -204,7 +204,7 @@ def _test_tool_handlers_pure():
     )
     assert out.startswith("[error]")
 
-    out = execute_tool("get_glyph", {"name": "Missing"}, ctx)
+    out = execute_tool("read_glyph", {"name": "Missing"}, ctx)
     assert out.startswith("[error]")
 
     out = execute_tool("unknown_tool", {}, ctx)
@@ -219,7 +219,7 @@ def _test_inspect_mode_rejects_mutations():
     layer = font.glyphs["Dje-cy"].layers["M_BOLD"]
     before = [(int(n.position.x), int(n.position.y)) for n in layer.paths[0].nodes]
     out = execute_tool(
-        "move_nodes",
+        "edit_nodes",
         {
             "glyph": "Dje-cy",
             "master": "Bold",
@@ -324,7 +324,7 @@ def _test_render_specimen_diff_unknown_id():
 
     font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
-    out = execute_tool("render_specimen_diff", {"reference_render_specimen_id": 1}, ctx)
+    out = execute_tool("compare_specimen", {"reference_specimen_id": 1}, ctx)
     assert out.startswith("[error]") and "render_specimen_id" in out.lower(), out
 
 
@@ -345,7 +345,7 @@ def _assert_render_specimen_diff_ok(out, *, reference_id, master="Bold"):
     assert isinstance(out, list) and len(out) == 2, out
     header, png_bytes = out
     assert isinstance(header, str), type(header)
-    assert header.startswith("render_specimen_diff"), header
+    assert header.startswith("compare_specimen"), header
     assert "reference_id=%d" % reference_id in header, header
     assert master in header, header
     assert isinstance(png_bytes, bytes), type(png_bytes)
@@ -400,7 +400,7 @@ def _test_render_specimen_diff_sequential():
     font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
-    out = execute_tool("render_specimen_diff", {"reference_render_specimen_id": 1}, ctx)
+    out = execute_tool("compare_specimen", {"reference_specimen_id": 1}, ctx)
     assert out.startswith("[error]"), out
     assert "No specimens" in out or "Unknown" in out, out
 
@@ -410,12 +410,12 @@ def _test_render_specimen_diff_sequential():
         assert rid == 1
 
         out = execute_tool(
-            "render_specimen_diff", {"reference_render_specimen_id": rid}, ctx
+            "compare_specimen", {"reference_specimen_id": rid}, ctx
         )
         _assert_render_specimen_diff_ok(out, reference_id=rid)
 
         execute_tool(
-            "move_nodes",
+            "edit_nodes",
             {
                 "glyph": "Dje-cy",
                 "master": "Bold",
@@ -427,12 +427,12 @@ def _test_render_specimen_diff_sequential():
             ctx,
         )
         out = execute_tool(
-            "render_specimen_diff", {"reference_render_specimen_id": rid}, ctx
+            "compare_specimen", {"reference_specimen_id": rid}, ctx
         )
         _assert_render_specimen_diff_ok(out, reference_id=rid)
 
         out = execute_tool(
-            "render_specimen_diff", {"reference_render_specimen_id": 99}, ctx
+            "compare_specimen", {"reference_specimen_id": 99}, ctx
         )
         assert isinstance(out, str) and out.startswith("[error]"), out
         assert "99" in out, out
@@ -452,7 +452,7 @@ def _test_render_specimen_diff_tier_mismatch():
         out = execute_tool("render_specimen", {"text": "Ђ", "master": "Bold"}, ctx)
         rid = _assert_render_specimen_ok(out)
         out = execute_tool(
-            "render_specimen_diff", {"reference_render_specimen_id": rid}, ctx
+            "compare_specimen", {"reference_specimen_id": rid}, ctx
         )
         assert isinstance(out, str), out
         assert "overlay skipped" in out, out
@@ -672,7 +672,7 @@ print('tp_x:', round(tp['x'], 1))
 print('tp_y:', round(tp['y'], 1))
 """
     result = execute_tool(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["Dje-cy"], "master": "Bold", "code": code},
         ctx,
     )
@@ -700,7 +700,7 @@ def _test_numeric_judge_basic():
         "print('x_range:', bb['x1'] - bb['x0'])\n"
     )
     result = execute_tool(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["Dje-cy"], "master": "Bold", "code": code},
         ctx,
     )
@@ -720,7 +720,7 @@ def _test_numeric_judge_dist_and_area():
         "print('area:', int(area(p0)))\n"
     )
     result = execute_tool(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["Dje-cy"], "master": "Bold", "code": code},
         ctx,
     )
@@ -739,7 +739,7 @@ def _test_numeric_judge_runtime_error():
         "x = g['Dje-cy'][99][0]['x']\n"
     )
     result = execute_tool(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["Dje-cy"], "master": "Bold", "code": code},
         ctx,
     )
@@ -755,7 +755,7 @@ def _test_numeric_judge_missing_glyph():
     ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     result = execute_tool(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["NoSuchGlyph"], "code": "print('hi')"},
         ctx,
     )
@@ -770,7 +770,7 @@ def _test_numeric_judge_no_output_message():
     ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
     result = execute_tool(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["Dje-cy"], "code": "x = 1 + 1"},
         ctx,
     )
@@ -787,7 +787,7 @@ def _test_numeric_judge_no_mutations():
     original_x = float(layer_bold.paths[0].nodes[0].position.x)
 
     execute_tool(
-        "numeric_judge",
+        "measure_geometry",
         {
             "glyphs": ["Dje-cy"],
             "master": "Bold",
@@ -805,13 +805,13 @@ def _test_get_glyph_component_transform():
     font = build_composite_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
-    out = execute_tool("get_glyph", {"name": "Composite-cy", "master": "Regular"}, ctx)
+    out = execute_tool("read_glyph", {"name": "Composite-cy", "master": "Regular"}, ctx)
     assert "components: 1" in out, out
     assert "Dje-cy" in out, out
     assert "offset=" in out or "identity" in out or "mirror" in out or "matrix=" in out, out
     assert "used as component in: (none)" in out, out
 
-    out2 = execute_tool("get_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx)
+    out2 = execute_tool("read_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx)
     assert "used as component in (1): Composite-cy" in out2, out2
 
 
@@ -828,7 +828,7 @@ def _test_numeric_judge_composite_transform():
         "print('y0:', p0[0]['y'])\n"
     )
     result = execute_tool(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["Composite-cy"], "master": "Regular", "code": code},
         ctx,
     )
@@ -852,7 +852,7 @@ def _test_numeric_judge_composite_mirror():
         "print('x0:', p0[0]['x'])\n"
     )
     result = execute_tool(
-        "numeric_judge",
+        "measure_geometry",
         {"glyphs": ["Mirrored-cy"], "master": "Regular", "code": code},
         ctx,
     )
@@ -865,7 +865,7 @@ def _test_get_glyph_no_component_uses():
     font = build_mock_font()
     ctx = tools.ToolContext(font_provider=lambda: font, session_mode="edit")
 
-    out = execute_tool("get_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx)
+    out = execute_tool("read_glyph", {"name": "Dje-cy", "master": "Bold"}, ctx)
     assert "used as component in: (none)" in out, out
 
 

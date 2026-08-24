@@ -3,7 +3,7 @@ from tools.font_access import resolve_glyph, resolve_master
 from tools.geometry import apply_transform, get_component_transform
 
 
-def handle_numeric_judge(args, ctx, font):
+def handle_measure_geometry(args, ctx, font):
     import builtins
     import contextlib
     import io
@@ -31,7 +31,7 @@ def handle_numeric_judge(args, ctx, font):
     # For composite glyphs, component nodes are included with their transforms applied.
     # x, y are always in the requested glyph's coordinate space (for measurement).
     # "component" is the base glyph name (None for direct paths) — use this as the
-    # glyph argument to move_nodes when editing.
+    # glyph argument to edit_nodes when editing.
     g = {}
     for name_raw in glyphs_raw:
         name = str(name_raw).strip()
@@ -226,7 +226,7 @@ def handle_numeric_judge(args, ctx, font):
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
-            exec(compile(code, "<numeric_judge>", "exec"), sandbox)
+            exec(compile(code, "<measure_geometry>", "exec"), sandbox)
     except Exception as e:
         prefix = buf.getvalue()
         err = "[error] %s: %s" % (type(e).__name__, e)

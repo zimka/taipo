@@ -49,7 +49,7 @@ def handle_list_glyphs(args, ctx, font):
     header = "glyphs (%d shown%s):" % (len(out), ", filter=%r" % raw_flt if flt else "")
     return header + "\n" + "\n".join(out)
 
-def handle_get_glyph(args, ctx, font):
+def handle_read_glyph(args, ctx, font):
     name = str(args.get("name") or "").strip()
     if not name:
         return "[error] 'name' is required."

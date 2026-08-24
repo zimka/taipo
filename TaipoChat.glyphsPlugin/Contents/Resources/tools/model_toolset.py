@@ -14,7 +14,7 @@ import typing
 from typing import Annotated, Any, get_args, get_origin
 
 from tools.context import ToolContext
-from tools.edit import handle_move_nodes, handle_set_width
+from tools.edit import handle_edit_nodes, handle_edit_width
 from tools.kerning import (
     handle_edit_kerning_pairs,
     handle_find_kerning_rules,
@@ -23,16 +23,16 @@ from tools.kerning import (
 from session_log import brief_tool_args, get_logger
 from tools.glyph_metadata import (
     MetadataPatch,
-    handle_get_glyph_metadata,
+    handle_read_glyph_metadata,
     handle_edit_glyph_metadata,
     metadata_schema_doc,
 )
-from tools.judge import handle_numeric_judge
-from tools.read import handle_get_glyph, handle_list_glyphs, handle_list_masters
+from tools.judge import handle_measure_geometry
+from tools.read import handle_read_glyph, handle_list_glyphs, handle_list_masters
 from tools.render import (
     handle_render_glyph,
     handle_render_specimen,
-    handle_render_specimen_diff,
+    handle_compare_specimen,
 )
 from utils import (
     SESSION_MODE_EDIT,
@@ -351,7 +351,8 @@ class ModelToolset:
     @model_tool
     def list_masters(self) -> str:
         """
-        List all masters (weight/width/custom axes) of the currently open font.
+        Useful for Find: list masters (weight/width/custom axes) of the open font.
+
         Returns master name, id and axis values.
         """
         return handle_list_masters({}, self._ctx, self._ctx.font)
@@ -359,7 +360,7 @@ class ModelToolset:
     @model_tool
     def list_glyphs(self, filter: str | None = None, limit: int = 200) -> str:
         """
-        List glyph names in the current font, optionally filtered.
+        Useful for Find: resolve a character, unicode hex, or name substring to glyph names.
 
         Filter modes (all case-insensitive):
           By name substring:  filter='cy'     → Dje-cy, Zhe-cy, ...
@@ -374,10 +375,9 @@ class ModelToolset:
         return handle_list_glyphs({"filter": filter, "limit": limit}, self._ctx, self._ctx.font)
 
     @model_tool
-    def get_glyph(self, name: str, master: str | None = None) -> str:
+    def read_glyph(self, name: str, master: str | None = None) -> str:
         """
-        Return paths, nodes, anchors, components and metrics of a single glyph at a
-        specific master, as structured text. Use this to reason about geometry.
+        Useful for Read: inspect paths, nodes, anchors, components, metrics, and component usage.
 
         Node conventions: offcurve=N means this handle controls the curve node at index N.
         curve=[A,B] means the curve's two Bézier handles are at nodes A and B.
@@ -389,26 +389,27 @@ class ModelToolset:
             name: Glyph name (e.g. 'Dje-cy') or a single character.
             master: Master name or id. Defaults to the first master.
         """
-        return handle_get_glyph({"name": name, "master": master}, self._ctx, self._ctx.font)
+        return handle_read_glyph({"name": name, "master": master}, self._ctx, self._ctx.font)
 
     @model_tool(metadata_return=True)
-    def get_glyph_metadata(self, glyph: str, master: str | None = None) -> str:
+    def read_glyph_metadata(self, glyph: str, master: str | None = None) -> str:
         """
-        Return font-wide glyph metadata as a JSON object.
+        Useful for Read: inspect unicode, export, classification, kerning groups, metrics keys, and spacing.
 
-        Fields include unicode, export, note, classification (category, subCategory,
-        script, case, direction), kerning groups (leftKerningGroup, rightKerningGroup),
-        and metrics keys (leftMetricsKey, rightMetricsKey, widthMetricsKey). When
-        master is provided, also includes spacing (lsb, rsb, width) for that master.
-        Use before edit_glyph_metadata to inspect current values and valid field names.
-        Unicode values use uppercase hex without a U+ prefix; null means unencoded.
-        Classification fields are null when inherited from Glyphs auto-classification.
+        Returns font-wide glyph metadata as a JSON object. Fields include unicode, export,
+        note, classification (category, subCategory, script, case, direction), kerning
+        groups (leftKerningGroup, rightKerningGroup), and metrics keys (leftMetricsKey,
+        rightMetricsKey, widthMetricsKey). When master is provided, also includes spacing
+        (lsb, rsb, width) for that master. Use before edit_glyph_metadata to inspect
+        current values and valid field names. Unicode values use uppercase hex without a
+        U+ prefix; null means unencoded. Classification fields are null when inherited
+        from Glyphs auto-classification.
 
         Args:
             glyph: Glyph name (e.g. '.notdef', 'Dje-cy') or a single character.
             master: Optional master name or id. When set, per-master lsb/rsb/width are included.
         """
-        return handle_get_glyph_metadata(
+        return handle_read_glyph_metadata(
             {"glyph": glyph, "master": master}, self._ctx, self._ctx.font
         )
 
@@ -420,15 +421,16 @@ class ModelToolset:
         master: str | None = None,
     ) -> str:
         """
-        Apply a partial metadata update to a glyph.
+        Useful for Edit: update unicode, export, classification, kerning groups, metrics keys, or spacing.
 
-        Only keys present in changes are applied. Use null on nullable fields to clear them
-        (e.g. clear unicode on .notdef, clear kerning groups, revert classification to
-        auto-inheritance). lsb, rsb, and width require master.
+        Apply a partial metadata update to a glyph. Only keys present in changes are applied.
+        Use null on nullable fields to clear them (e.g. clear unicode on .notdef, clear
+        kerning groups, revert classification to auto-inheritance). lsb, rsb, and width
+        require master.
 
         Args:
             glyph: Glyph name.
-            changes: JSON object with fields to change (see get_glyph_metadata schema).
+            changes: JSON object with fields to change (see read_glyph_metadata schema).
             master: Master name or id. Required when changes include lsb, rsb, or width.
         """
         return handle_edit_glyph_metadata(
@@ -444,6 +446,8 @@ class ModelToolset:
         pairs: list[dict[str, str]],
     ) -> str:
         """
+        Useful for Read: inspect stored, effective, and parent kerning values for specific slots.
+
         Read kerning slots: stored_value, effective_value, and parent for each pair.
 
         Operands use bare glyph names or @Group for kerning classes (e.g. @A). Never pass
@@ -482,11 +486,13 @@ class ModelToolset:
         changes: list[dict[str, Any]],
     ) -> str:
         """
+        Useful for Edit: write or remove kerning slot values after Read on the same slot.
+
         Write kerning slots via stored_value (null removes the record).
 
         Operands identical to read_kerning_pairs (@Group or glyph name). Always
         read_kerning_pairs on the same {left, right} before editing — do not infer slots
-        from find_kerning_rules or get_glyph_metadata alone.
+        from find_kerning_rules or read_glyph_metadata alone.
 
         Impact levels (disclose in the plan):
         - glyph × glyph: normal
@@ -512,7 +518,7 @@ class ModelToolset:
         neighbor_kind: str = "all",
     ) -> str:
         """
-        Discover direct kerning table neighbours for a glyph or @Group (no values).
+        Useful for Find: discover direct kerning neighbours for a glyph or @Group (no values).
 
         Lists stored edges touching target only — no transitivity through class membership.
         After find, call read_kerning_pairs on specific {left, right} slots for values;
@@ -548,6 +554,8 @@ class ModelToolset:
         size: int | None = None,
     ):
         """
+        Useful for Look: proof how text sets in the current font. Note render_specimen_id if you will Compare later.
+
         Render a short text using the CURRENT state of the open font and return a PNG
         image. Uses a full compiled-font render when export succeeds. If export
         fails, falls back to feature-limited or glyph-limited; the result header
@@ -559,7 +567,7 @@ class ModelToolset:
         render_limitations before trusting the listed capabilities.
 
         Note render_specimen_id from the result. Call this BEFORE mutations if you
-        will later call render_specimen_diff with that id. Keep the same specimen
+        will later call compare_specimen with that id. Keep the same specimen
         (text/lines, master, size) for the pair you intend to compare.
 
         Args:
@@ -577,12 +585,14 @@ class ModelToolset:
     @model_tool
     def render_glyph(self, name: str, master: str | None = None, size: int | None = None):
         """
+        Useful for Look: map node indices to visual positions on a single glyph at large size.
+
         Render a single glyph at large size with every node annotated by index number.
         Each path has a distinct color (7-color palette). Node shape encodes type:
         filled circle=line, filled circle with white halo=curve, hollow square=offcurve.
         Direct paths labeled path[N]; component nodes at 70% opacity labeled (BaseName)path[N].
-        Use this together with get_glyph to map node indices to their visual positions
-        before writing numeric_judge code.
+        Use this together with read_glyph to map node indices to their visual positions
+        before writing measure_geometry code.
 
         Args:
             name: Glyph name (e.g. 'Dje-cy') or a single character.
@@ -594,17 +604,18 @@ class ModelToolset:
         )
 
     @model_tool
-    def numeric_judge(
+    def measure_geometry(
         self,
         glyphs: list[str],
         code: str,
         master: str | None = None,
     ) -> str:
         """
+        Useful for Measure: confirm issues and compute exact edit deltas. A printed number is a finding.
+
         Run a Python snippet in a read-only geometry sandbox to measure distances,
-        areas, angles, or ratios from node coordinates. The primary tool for confirming
-        issues and validating fixes. Use print() for output; the captured stdout is
-        returned. Runtime errors are returned as error messages.
+        areas, angles, or ratios from node coordinates. Use print() for output; the
+        captured stdout is returned. Runtime errors are returned as error messages.
 
         Sandbox bindings:
           g[glyph_name][path_idx][node_idx] → {x, y, type, smooth, component}
@@ -628,12 +639,12 @@ class ModelToolset:
             master: Master name or id. Defaults to the first master.
             code: Python snippet. Use print() to output results. Max 4000 chars.
         """
-        return handle_numeric_judge(
+        return handle_measure_geometry(
             {"glyphs": glyphs, "master": master, "code": code}, self._ctx, self._ctx.font
         )
 
     @model_tool(requires_edit=True)
-    def move_nodes(
+    def edit_nodes(
         self,
         glyph: str,
         master: str,
@@ -643,21 +654,23 @@ class ModelToolset:
         dy: int,
     ) -> str:
         """
+        Useful for Edit: move nodes after you have Read indices and Measured the delta.
+
         Move specific nodes in a path of a glyph by an offset.
-        Addresses nodes by path index and node index (from get_glyph output).
+        Addresses nodes by path index and node index (from read_glyph output).
         Multiple nodes in the same path can be shifted in one call.
         For nodes in different paths or different glyphs, use parallel tool calls.
-        Use set_width when the advance width also needs to change.
+        Use edit_width when the advance width also needs to change.
 
         Args:
             glyph: Glyph name.
             master: Master name or id.
-            path: Path index (0-based) from get_glyph output.
+            path: Path index (0-based) from read_glyph output.
             nodes: Node indices within the path (0-based). Must be non-empty.
             dx: X offset in font units.
             dy: Y offset in font units.
         """
-        return handle_move_nodes(
+        return handle_edit_nodes(
             {
                 "glyph": glyph,
                 "master": master,
@@ -671,24 +684,28 @@ class ModelToolset:
         )
 
     @model_tool(requires_edit=True)
-    def set_width(self, glyph: str, master: str, width: int) -> str:
+    def edit_width(self, glyph: str, master: str, width: int) -> str:
         """
+        Useful for Edit: set advance width when widening or narrowing a glyph.
+
         Set the advance width (spacing metric) of a glyph in one master.
         The advance width is separate from the outline — moving nodes does not change it.
-        Use this together with move_nodes when widening or narrowing a glyph.
+        Use this together with edit_nodes when widening or narrowing a glyph.
 
         Args:
             glyph: Glyph name.
             master: Master name or id.
             width: New advance width in font units. Must be non-negative.
         """
-        return handle_set_width(
+        return handle_edit_width(
             {"glyph": glyph, "master": master, "width": width}, self._ctx, self._ctx.font
         )
 
     @model_tool
-    def render_specimen_diff(self, reference_render_specimen_id: int):
+    def compare_specimen(self, reference_specimen_id: int):
         """
+        Useful for Compare: red/green overlay vs an earlier Look proof from this session.
+
         Render a red/green overlay comparing an earlier render_specimen (red) against
         the current live font (green). Yellow pixels are overlap.
         The id must come from an earlier render_specimen in this session. Specimen
@@ -699,11 +716,11 @@ class ModelToolset:
         current image in that case; do not treat a skipped result as a visual diff.
 
         Args:
-            reference_render_specimen_id: render_specimen_id from an earlier
-                render_specimen result in this session.
+            reference_specimen_id: render_specimen_id from an earlier render_specimen
+                result in this session.
         """
-        return handle_render_specimen_diff(
-            {"reference_render_specimen_id": reference_render_specimen_id},
+        return handle_compare_specimen(
+            {"reference_specimen_id": reference_specimen_id},
             self._ctx,
             self._ctx.font,
         )
