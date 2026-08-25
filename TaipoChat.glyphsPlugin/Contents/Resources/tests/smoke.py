@@ -940,6 +940,39 @@ def _test_temporary_export_fixups():
     assert notdef.unicode == "0000"
 
 
+def _test_compile_font_glyphs4_none_success():
+    """Glyphs 4 may return None from generate() even when the OTF file exists."""
+    import tempfile
+    from unittest.mock import patch
+
+    from tests.mock import _MockFont, _MockMaster
+    from tools.render_coretext import compile_font_to_temp_otf
+
+    class _MockInstance:
+        name = "Regular"
+        active = True
+        axes = []
+
+        def generate(self, **kwargs):
+            export_dir = kwargs.get("fontPath") or kwargs.get("FontPath")
+            with open(os.path.join(export_dir, "Mock-Regular.otf"), "wb") as fh:
+                fh.write(b"OTF")
+            return None
+
+    font = _MockFont()
+    master = _MockMaster("Regular", "M_REG")
+
+    with patch(
+        "tools.render_coretext._resolve_export_instance",
+        return_value=_MockInstance(),
+    ):
+        otf_path, err = compile_font_to_temp_otf(font, master)
+
+    assert err is None, err
+    assert otf_path is not None and otf_path.endswith(".otf")
+    assert os.path.isfile(otf_path)
+
+
 def _test_format_render_tier_block():
     from tools.render_coretext import RenderTier, format_render_tier_block
 
@@ -1041,6 +1074,7 @@ def run_smoke():
     _test_numeric_judge_composite_mirror()
     _test_resolve_specimen_lines()
     _test_temporary_export_fixups()
+    _test_compile_font_glyphs4_none_success()
     _test_format_render_tier_block()
     _test_transcript_format()
     print("Taipo Chat Resources/tests/smoke.py: run_smoke() OK")

@@ -316,17 +316,21 @@ def compile_font_to_temp_otf(font, master) -> tuple[str | None, str | None]:
     if exc_msg:
         return None, exc_msg
 
-    if result is not True:
-        shutil.rmtree(export_dir, ignore_errors=True)
-        return None, _export_error_message(result)
-
     otf_path = _find_exported_otf(export_dir, instance)
-    if otf_path is None:
-        shutil.rmtree(export_dir, ignore_errors=True)
-        return None, "Font export produced no OTF file."
+    if result is True:
+        if otf_path is None:
+            shutil.rmtree(export_dir, ignore_errors=True)
+            return None, "Font export produced no OTF file."
+        _render_logger.debug("Exported OTF: %s", otf_path)
+        return otf_path, None
 
-    _render_logger.debug("Exported OTF: %s", otf_path)
-    return otf_path, None
+    if result is None and otf_path is not None:
+        # Glyphs 4: generate() may return None even when the OTF was written.
+        _render_logger.debug("Exported OTF (generate returned None): %s", otf_path)
+        return otf_path, None
+
+    shutil.rmtree(export_dir, ignore_errors=True)
+    return None, _export_error_message(result)
 
 
 def compile_font_stripped_to_temp_otf(font, master) -> tuple[str | None, str | None]:
