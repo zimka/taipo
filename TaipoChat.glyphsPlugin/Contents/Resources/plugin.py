@@ -468,7 +468,7 @@ class TaipoChatPlugin(GeneralPlugin):
         self._status_override = None
         self._settings_expanded = False
         self._debug_info = _show_tool_results_from_default(
-            _get_default("debugInfo", "1")
+            _get_default("debugInfo", "0")
         )
         self._preview = None
         self._preview_scroll = None
