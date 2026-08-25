@@ -12,10 +12,12 @@ from utils import (
     DEFAULT_MODEL,
     DEFAULT_SYSTEM_PROMPT,
     MAX_AGENT_ITERATIONS,
+    REASONING_EFFORT_NONE,
     _chat_endpoint,
     format_usage_caption,
     load_default_system_prompt,
     mode_contract_text,
+    normalize_reasoning_effort,
     normalize_session_mode,
     normalize_tool_result_content,
     normalize_usage,
@@ -30,7 +32,9 @@ _SETTINGS_KEYS = frozenset(
 # Keys loaded from persisted defaults. ``systemPrompt`` is intentionally excluded during
 # active development so that edits to ``assets/system_prompt.md`` take effect after a
 # Glyphs restart, without being shadowed by a stale value cached in ``Glyphs.defaults``.
-_PERSISTED_LOAD_KEYS = frozenset({"baseUrl", "apiKey", "model", "maxTokens"})
+_PERSISTED_LOAD_KEYS = frozenset(
+    {"baseUrl", "apiKey", "model", "maxTokens", "reasoningEffort"}
+)
 
 _USAGE_SUM_KEYS = (
     "input_tokens",
@@ -64,6 +68,7 @@ class ChatState:
             "apiKey": "",
             "model": DEFAULT_MODEL,
             "maxTokens": DEFAULT_MAX_TOKENS,
+            "reasoningEffort": REASONING_EFFORT_NONE,
             "systemPrompt": DEFAULT_SYSTEM_PROMPT,
         }
 
@@ -78,13 +83,20 @@ class ChatState:
         self._messages.append({"role": "assistant", "content": list(blocks)})
 
     def update_settings_from_ui_fields(
-        self, base_url, api_key, model, max_tokens, system_prompt
+        self,
+        base_url,
+        api_key,
+        model,
+        max_tokens,
+        system_prompt,
+        reasoning_effort=REASONING_EFFORT_NONE,
     ):
         self.settings["baseUrl"] = base_url
         self.settings["apiKey"] = api_key
         self.settings["model"] = model
         self.settings["maxTokens"] = max_tokens
         self.settings["systemPrompt"] = system_prompt
+        self.settings["reasoningEffort"] = reasoning_effort
         self._normalize_settings()
 
     def reset_system_prompt_to_default(self):
@@ -146,6 +158,7 @@ class ChatState:
         base = (s.get("baseUrl") or "").strip()
         url = _chat_endpoint(base)
         auth = s.get("apiKey") or ""
+        reasoning_effort = normalize_reasoning_effort(s.get("reasoningEffort"))
 
         iteration = 0
         while iteration < MAX_AGENT_ITERATIONS:
@@ -155,7 +168,12 @@ class ChatState:
 
             try:
                 body = provider.build_request_body(
-                    model, max_tokens, self._messages, system_text, tools=tool_schemas
+                    model,
+                    max_tokens,
+                    self._messages,
+                    system_text,
+                    tools=tool_schemas,
+                    reasoning_effort=reasoning_effort,
                 )
                 payload = provider.post_request(body, url, auth)
             except HTTPError as e:
@@ -301,6 +319,16 @@ class ChatState:
         for k in _PERSISTED_LOAD_KEYS:
             if k in obj and obj[k] is not None:
                 s[k] = str(obj[k])
+        if "enableReasoning" in obj and "reasoningEffort" not in obj:
+            raw = obj.get("enableReasoning")
+            if isinstance(raw, bool):
+                s["reasoningEffort"] = "medium" if raw else REASONING_EFFORT_NONE
+            else:
+                s["reasoningEffort"] = (
+                    "medium"
+                    if str(raw).strip().lower() in ("1", "true", "yes")
+                    else REASONING_EFFORT_NONE
+                )
         self._normalize_settings()
 
     def _normalize_settings(self):
@@ -309,4 +337,5 @@ class ChatState:
         s["baseUrl"] = bu if bu else DEFAULT_BASE_URL
         s["model"] = (s.get("model") or "").strip() or DEFAULT_MODEL
         s["maxTokens"] = (s.get("maxTokens") or "").strip() or DEFAULT_MAX_TOKENS
+        s["reasoningEffort"] = normalize_reasoning_effort(s.get("reasoningEffort"))
         s["systemPrompt"] = s.get("systemPrompt") or ""

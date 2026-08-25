@@ -8,6 +8,17 @@ DEFAULT_BASE_URL = "https://api.openai.com"
 DEFAULT_MODEL = "gpt-5.4"
 DEFAULT_MAX_TOKENS = "8192"
 
+REASONING_EFFORT_NONE = "none"
+REASONING_EFFORT_OPTIONS = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+)
+
 MARKER_ISSUE_RECOGNIZED = "ISSUE RECOGNIZED"
 MARKER_ISSUE_NOT_RECOGNIZED = "ISSUE NOT RECOGNIZED"
 MARKER_DOD_PASSED = "DOD PASSED"
@@ -106,6 +117,29 @@ def parse_max_tokens(raw, default_str=DEFAULT_MAX_TOKENS):
         return max(1, min(200000, int(s)))
     except ValueError:
         return int(default_str)
+
+
+def normalize_reasoning_effort(raw):
+    """Return a known reasoning effort string; unknown/empty → ``none``."""
+    if isinstance(raw, bool):
+        return "medium" if raw else REASONING_EFFORT_NONE
+    value = (raw or "").strip().lower()
+    if value in REASONING_EFFORT_OPTIONS:
+        return value
+    return REASONING_EFFORT_NONE
+
+
+def reasoning_effort_menu_index(value):
+    """Map a reasoning effort string to a PopUpButton menu index."""
+    return REASONING_EFFORT_OPTIONS.index(normalize_reasoning_effort(value))
+
+
+def reasoning_effort_from_menu_index(index):
+    """Map a PopUpButton menu index to a reasoning effort string."""
+    try:
+        return REASONING_EFFORT_OPTIONS[int(index)]
+    except (TypeError, ValueError, IndexError):
+        return REASONING_EFFORT_NONE
 
 
 def normalize_usage(usage):

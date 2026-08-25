@@ -28,7 +28,7 @@ from AppKit import (
 from Foundation import NSData, NSMakeRect, NSOperationQueue, NSSelectorFromString
 from GlyphsApp import Glyphs, WINDOW_MENU
 from GlyphsApp.plugins import GeneralPlugin
-from vanilla import Button, CheckBox, EditText, Group, TextBox, TextEditor, Window
+from vanilla import Button, CheckBox, EditText, Group, PopUpButton, TextBox, TextEditor, Window
 
 from tools import DEFAULT_RENDER_CONTRACT, ToolContext
 from tools.model_toolset import ModelToolset
@@ -41,10 +41,14 @@ from utils import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL,
     DEFAULT_SYSTEM_PROMPT,
+    REASONING_EFFORT_OPTIONS,
     SESSION_MODE_EDIT,
     SESSION_MODE_INSPECT,
     mode_switch_notice,
+    normalize_reasoning_effort,
     normalize_session_mode,
+    reasoning_effort_from_menu_index,
+    reasoning_effort_menu_index,
 )
 
 _SETTINGS_TOGGLE_W = 76
@@ -274,6 +278,14 @@ class TaipoChatPlugin(GeneralPlugin):
             value=self._debug_info,
             callback=self._on_debug_info_toggle_,
         )
+        self.w.reasoningEffortLabel = TextBox(
+            (12, 0, -12, _LABEL_ROW_H),
+            "Reasoning effort:",
+        )
+        self.w.reasoningEffort = PopUpButton(
+            (12, 0, -12, _SETTINGS_ROW_H),
+            list(REASONING_EFFORT_OPTIONS),
+        )
         self.w.sectionDivider = TextBox((12, 0, -12, _SECTION_SEP_H), "")
         _style_separator(self.w.sectionDivider)
 
@@ -326,7 +338,8 @@ class TaipoChatPlugin(GeneralPlugin):
         )
         _set_tooltip(
             self.w.settingsToggle,
-            "Show or hide API Base URL, model, max tokens, transcript options, and system prompt.",
+            "Show or hide API Base URL, model, max tokens, reasoning effort, "
+            "transcript options, and system prompt.",
         )
         _set_tooltip(
             self.w.baseUrl,
@@ -346,6 +359,11 @@ class TaipoChatPlugin(GeneralPlugin):
             self.w.showToolResults,
             "When on, shows tool inputs/outputs, turn-finished markers, and full error detail. "
             "Specimen and diff images always appear.",
+        )
+        _set_tooltip(
+            self.w.reasoningEffort,
+            "Sent as reasoning_effort on every request. "
+            "If the provider rejects the value, the error appears in the transcript.",
         )
 
         self._sync_settings_controls_from_state()
@@ -569,6 +587,8 @@ class TaipoChatPlugin(GeneralPlugin):
                 + _SETTINGS_ROW_GAP
             )
             h += _SETTINGS_ROW_H + _SETTINGS_ROW_GAP
+            h += _LABEL_ROW_H + _SETTINGS_ROW_GAP + _SETTINGS_ROW_H
+            h += _SETTINGS_ROW_GAP
             h += _LABEL_ROW_H + _SETTINGS_ROW_GAP + _SYSTEM_PROMPT_H
         return h
 
@@ -605,6 +625,8 @@ class TaipoChatPlugin(GeneralPlugin):
             self.w.maxTokensLabel,
             self.w.maxTokens,
             self.w.showToolResults,
+            self.w.reasoningEffortLabel,
+            self.w.reasoningEffort,
             self.w.systemPromptLabel,
             self.w.systemPrompt,
         )
@@ -628,6 +650,11 @@ class TaipoChatPlugin(GeneralPlugin):
             y += _SETTINGS_ROW_H + _SETTINGS_ROW_GAP
 
             self.w.showToolResults.setPosSize((12, y, -12, _SETTINGS_ROW_H))
+            y += _SETTINGS_ROW_H + _SETTINGS_ROW_GAP
+
+            self.w.reasoningEffortLabel.setPosSize((12, y, -12, _LABEL_ROW_H))
+            y += _LABEL_ROW_H + _SETTINGS_ROW_GAP
+            self.w.reasoningEffort.setPosSize((12, y, -12, _SETTINGS_ROW_H))
             y += _SETTINGS_ROW_H + _SETTINGS_ROW_GAP
 
             self.w.systemPromptLabel.setPosSize((12, y, -12, _LABEL_ROW_H))
@@ -685,6 +712,9 @@ class TaipoChatPlugin(GeneralPlugin):
         self.w.systemPrompt.set(
             (s.get("systemPrompt") or "").strip() or DEFAULT_SYSTEM_PROMPT
         )
+        self.w.reasoningEffort.set(
+            reasoning_effort_menu_index(s.get("reasoningEffort"))
+        )
 
     @objc.python_method
     def _refresh_setup_ui(self):
@@ -711,6 +741,7 @@ class TaipoChatPlugin(GeneralPlugin):
             (self.w.model.get() or "").strip() or DEFAULT_MODEL,
             (self.w.maxTokens.get() or "").strip(),
             (self.w.systemPrompt.get() or "").strip() or DEFAULT_SYSTEM_PROMPT,
+            reasoning_effort_from_menu_index(self.w.reasoningEffort.get()),
         )
         _set_default("settingsJson", self._state.get_settings_json())
 

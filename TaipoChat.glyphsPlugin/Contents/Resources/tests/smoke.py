@@ -36,9 +36,13 @@ def _test_utils_basics():
         format_usage_caption,
         mode_contract_text,
         mode_switch_notice,
+        normalize_reasoning_effort,
         normalize_session_mode,
         normalize_tool_result_content,
         normalize_usage,
+        reasoning_effort_from_menu_index,
+        reasoning_effort_menu_index,
+        REASONING_EFFORT_OPTIONS,
         TOOL_TAG_EDIT_ONLY,
     )
 
@@ -75,6 +79,41 @@ def _test_utils_basics():
     assert mode_contract_text("edit").startswith("Current mode: Edit.")
     assert "Mutation tools are available" in mode_switch_notice("edit")
     assert "will not be changed" in mode_switch_notice("inspect")
+
+    assert normalize_reasoning_effort(None) == "none"
+    assert normalize_reasoning_effort("MEDIUM") == "medium"
+    assert normalize_reasoning_effort("bogus") == "none"
+    assert normalize_reasoning_effort(True) == "medium"
+    assert normalize_reasoning_effort(False) == "none"
+
+    assert reasoning_effort_menu_index("high") == REASONING_EFFORT_OPTIONS.index("high")
+    assert reasoning_effort_from_menu_index(0) == "none"
+    assert reasoning_effort_from_menu_index(99) == "none"
+
+
+def _test_build_request_reasoning_effort():
+    from provider import build_request_body
+
+    tool = {"name": "list_masters", "input_schema": {"type": "object"}}
+    body = build_request_body(
+        "gpt-5.6-sol",
+        1024,
+        [],
+        "sys",
+        tools=[tool],
+        reasoning_effort="none",
+    )
+    assert body["reasoning_effort"] == "none"
+
+    body = build_request_body(
+        "gpt-5.6-sol",
+        1024,
+        [],
+        "sys",
+        tools=[tool],
+        reasoning_effort="high",
+    )
+    assert body["reasoning_effort"] == "high"
 
 
 def _test_parse_provider_response():
@@ -975,6 +1014,7 @@ def _test_transcript_format():
 def run_smoke():
     """Run all smoke tests that do not require a live Glyphs font."""
     _test_utils_basics()
+    _test_build_request_reasoning_effort()
     _test_parse_provider_response()
     _test_tool_handlers_pure()
     _test_inspect_mode_rejects_mutations()

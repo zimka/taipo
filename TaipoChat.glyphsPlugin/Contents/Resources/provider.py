@@ -7,12 +7,15 @@ import json
 from http_client import requests_post
 
 
-def build_request_body(model, max_tokens, messages, system_text, tools=None):
+def build_request_body(
+    model, max_tokens, messages, system_text, tools=None, reasoning_effort="none"
+):
     """
     Build an OpenAI Chat Completions request body from provider-neutral messages.
 
     ``messages`` is a list of dicts with provider-neutral content blocks.
     ``tools`` is a list in Anthropic schema format (will be converted).
+    ``reasoning_effort`` is forwarded as a top-level OpenAI-compatible string.
     Returns a dict ready to POST.
     """
     gpt_messages = _convert_messages(messages, system_text)
@@ -20,6 +23,7 @@ def build_request_body(model, max_tokens, messages, system_text, tools=None):
         "model": model,
         "max_completion_tokens": max_tokens,
         "messages": gpt_messages,
+        "reasoning_effort": reasoning_effort,
     }
     if tools:
         body["tools"] = [_convert_tool_schema(t) for t in tools]
