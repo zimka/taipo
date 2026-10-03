@@ -394,13 +394,16 @@ def _read_one_pair(
     }
 
     if left_kind == "glyph" and right_kind == "glyph":
-        expected = _cascade_expected_glyph_pair(
+        effective = _cascade_expected_glyph_pair(
             font, master.id, left_display, right_display, table=table
         )
-        actual = _glyphs_api_pair_value(font, master, left_display, right_display)
-        result["effective_value"] = actual
-        if expected != actual:
-            result["WARNING"] = _warning_message(expected, actual)
+        result["effective_value"] = effective
+        # kerningForPair() with glyph names does a direct table lookup (no cascade),
+        # so cross-checking it against the cascade only makes sense for direct pairs.
+        if stored_value is not None:
+            actual = _glyphs_api_pair_value(font, master, left_display, right_display)
+            if effective != actual:
+                result["WARNING"] = _warning_message(effective, actual)
     else:
         if stored_value is not None:
             result["effective_value"] = stored_value
